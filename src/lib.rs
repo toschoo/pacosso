@@ -1,16 +1,13 @@
 use std::error::Error;
 use std::io::{self, Read, ErrorKind};
 use std::fmt;
-use std::iter::{once, repeat};
 use std::collections::HashSet;
-use std::str::FromStr;
 use std::str;
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Opts {
     buf_size: usize,
     buf_num: usize,
-    max_buf_num: usize,
     max_stream: u64,
 }
 
@@ -19,7 +16,6 @@ impl Default for Opts {
         Opts {
             buf_size: 8192,
             buf_num: 3,
-            max_buf_num: 3 * 2,
             max_stream: u32::MAX as u64,
         }
     }
@@ -33,7 +29,6 @@ impl Opts {
         Opts {
             buf_size: s,
             buf_num: self.buf_num,
-            max_buf_num: self.max_buf_num,
             max_stream: self.max_stream,
         }
     }
@@ -41,15 +36,6 @@ impl Opts {
         Opts {
             buf_size: self.buf_size,
             buf_num: s,
-            max_buf_num: self.max_buf_num,
-            max_stream: self.max_stream,
-        }
-    }
-    pub fn set_max_buf_num(self, s: usize) -> Opts {
-        Opts {
-            buf_size: self.buf_size,
-            buf_num: self.buf_num,
-            max_buf_num: s,
             max_stream: self.max_stream,
         }
     }
@@ -57,7 +43,6 @@ impl Opts {
         Opts {
             buf_size: self.buf_size,
             buf_num: self.buf_num,
-            max_buf_num: self.max_buf_num,
             max_stream: s,
         }
     }
@@ -65,7 +50,6 @@ impl Opts {
         Opts {
             buf_size: self.buf_size,
             buf_num: self.buf_num,
-            max_buf_num: self.max_buf_num,
             max_stream: 0,
         }
     }
@@ -75,8 +59,8 @@ type ParseResult<T> = Result<T, ParseError>;
 
 #[derive(Debug)]
 pub enum ParseError {
-    ParseFailed(String),
-    Unrecoverable(Box<ParseError>),
+    Failed(String),
+    Fatal(Box<ParseError>),
     IOError(io::Error)
 }
 
@@ -85,61 +69,57 @@ impl Error for ParseError { }
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result <(), fmt::Error> {
         match self {
-            ParseError::ParseFailed(msg) => write!(f, "parsing failed: {}", msg),
-            ParseError::Unrecoverable(e) => write!(f, "cannot recover from error '{}'", e),
+            ParseError::Failed(msg) => write!(f, "parsing failed: {}", msg),
+            ParseError::Fatal(e) => write!(f, "cannot recover from error '{}'", e),
             ParseError::IOError(e) => write!(f, "I/O error: {:?}", e),
         }
     }
 }
 
 fn err_not_impl() -> ParseError {
-    ParseError::ParseFailed("not yet implemented".to_string())
-}
-
-fn err_no_input() -> ParseError {
-    ParseError::ParseFailed("no input".to_string())
+    ParseError::Failed("not yet implemented".to_string())
 }
 
 fn err_eof() -> ParseError {
-    ParseError::ParseFailed("end of file".to_string())
+    ParseError::Failed("end of file".to_string())
 }
 
 fn err_not_eof() -> ParseError {
-    ParseError::ParseFailed("not the end of file".to_string())
+    ParseError::Failed("not the end of file".to_string())
 }
 
 fn err_exceeds_buffers(needed: usize, have: usize) -> ParseError {
-    ParseError::ParseFailed(format!(
+    ParseError::Failed(format!(
        "parser needs more buffer space ({}) than available ({})", needed, have))
 }
 
 fn err_expected_byte(expected: u8, have: u8) -> ParseError {
-    ParseError::ParseFailed(format!(
+    ParseError::Failed(format!(
        "expected byte: {}, have: {}", expected, have))
 }
 
 fn err_expected_char(expected: char) -> ParseError {
-    ParseError::ParseFailed(format!(
+    ParseError::Failed(format!(
        "expected char: {}", expected))
 }
 
 fn err_expected_whitespace(have: u8) -> ParseError {
-    ParseError::ParseFailed(format!(
+    ParseError::Failed(format!(
        "expected whitespace, have: {}", have))
 }
 
 fn err_not_a_digit(have: u8) -> ParseError {
-    ParseError::ParseFailed(format!(
+    ParseError::Failed(format!(
        "ascii digit expected, have: {}", have))
 }
 
 fn err_all_failed() -> ParseError {
-    ParseError::ParseFailed(format!(
+    ParseError::Failed(format!(
        "all parsers of a choice failed"))
 }
 
 fn err_unrecoverable(e: ParseError) -> ParseError {
-    ParseError::Unrecoverable(Box::new(e))
+    ParseError::Fatal(Box::new(e))
 }
 
 
@@ -152,7 +132,7 @@ struct Cursor {
     lpos: u64,
 }
 
-pub struct Parser<R: Read> {
+pub struct Stream<R: Read> {
     reader: R,
     bufs: Vec<Buf>,
     valid: Vec<bool>,
@@ -161,23 +141,22 @@ pub struct Parser<R: Read> {
     inited: bool,
     eof: bool,
     white_space: HashSet<u8>,
-    // alternatives
 }
 
 type Buf = Vec<u8>;
 
-impl<R: Read> Parser<R> {
-    pub fn new(opts: Opts, reader: R) -> Parser<R> {
+impl<R: Read> Stream<R> {
+    pub fn new(opts: Opts, reader: R) -> Stream<R> {
        let mut buf = Vec::with_capacity(opts.buf_num);
-       for i in 0..opts.buf_num {
+       for _ in 0..opts.buf_num {
            buf.push(vec!(0; opts.buf_size));
        }
        let mut valid = Vec::with_capacity(opts.buf_num);
-       for i in 0 .. opts.buf_num {
+       for _ in 0 .. opts.buf_num {
            valid.push(false);
        }
 
-       Parser {
+       Stream {
           reader: reader,
           bufs: buf,
           valid: valid,
@@ -354,7 +333,6 @@ impl<R: Read> Parser<R> {
         self.bufs[cur.buf][cur.pos]
     }
 
-    // Vec is more flexible!
     fn get_many(&self, cur: Cursor, size: usize, target: &mut [u8]) {
         let mut pos = cur.pos;
         let mut buf = cur.buf;
@@ -373,7 +351,7 @@ impl<R: Read> Parser<R> {
     }
 
     pub fn fail(&mut self, msg: &str) -> ParseResult<()> {
-        Err(ParseError::ParseFailed(msg.to_string()))
+        Err(ParseError::Failed(msg.to_string()))
     }
 
     pub fn eof(&mut self) -> ParseResult<()> {
@@ -382,7 +360,7 @@ impl<R: Read> Parser<R> {
                 self.reset_cur(cur);
                 return Err(err_not_eof());
             },
-            Err(ParseError::ParseFailed(s)) if s == "end of file" => return Ok(()),
+            Err(ParseError::Failed(s)) if s == "end of file" => return Ok(()),
             Err(e) => return Err(e),
         }
     }
@@ -474,7 +452,7 @@ impl<R: Read> Parser<R> {
             // we don't want to fail on eof if we read at least one whitespace char
             let cur = match self.consume(1, false) {
                 Ok(c) => c,
-                Err(ParseError::ParseFailed(s)) if !first && s == "end of file" => return Ok(()),
+                Err(ParseError::Failed(s)) if !first && s == "end of file" => return Ok(()),
                 Err(e) => return Err(e),
             };
 
@@ -518,7 +496,7 @@ impl<R: Read> Parser<R> {
         let mut cur = self.consume(n, true)?;
         let sav = cur.clone();
         let mut v = Vec::with_capacity(n);
-        for i in 0 .. n {
+        for _ in 0 .. n {
             v.push(self.get(cur));
             self.advance_this(&mut cur, 1);
         }
@@ -534,44 +512,33 @@ impl<R: Read> Parser<R> {
         return Err(err_not_impl());
     }
 
-    pub fn binary(&mut self, buf: Vec<u8>) -> ParseResult<()> {
+    // string, e.g. string("BEGIN")
+    pub fn string(&mut self, pattern: &str) -> ParseResult<()> {
         return Err(err_not_impl());
     }
 
-    // all parsers try to reset the cursor,
-    // so attempt does not make much sense ...
-    pub fn attempt<T>(&mut self, parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>) -> ParseResult<T> {
-        let cur = self.cur.clone();
-        match parse(self) {
-            Err(e) => {
-                if self.resettable(cur) {
-                    self.reset_cur(cur);
-                } else {
-                    return Err(err_unrecoverable(e));
-                }
-                return Err(e);
-            },
-            Ok(n) => return Ok(n),
-        }
+    // string, e.g. s.get_string()
+    pub fn get_string(&mut self, n: usize) -> ParseResult<String> {
+        return Err(err_not_impl());
+    }
+
+    // bytes, sequence of (potentially) non-unicode bytes
+    pub fn bytes(&mut self, pattern: Vec<u8>) -> ParseResult<()> {
+        return Err(err_not_impl());
+    }
+
+    // bytes, sequence of (potentially) non-unicode bytes
+    pub fn get_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
+        return Err(err_not_impl());
+    }
+
+    // binary object size = buf.len()
+    pub fn blob(&mut self, buf: Vec<u8>) -> ParseResult<()> {
+        return Err(err_not_impl());
     }
 
     // trait object or function?
-    pub fn attempt2<T>(&mut self, parse: fn(&mut Parser<R>) -> ParseResult<T>) -> ParseResult<T> {
-        let cur = self.cur.clone();
-        match parse(self) {
-            Err(e) => {
-                if self.resettable(cur) {
-                   self.reset_cur(cur);
-                } else {
-                    return Err(err_unrecoverable(e));
-                }
-                return Err(e);
-            },
-            Ok(n) => return Ok(n),
-        }
-    }
-
-    pub fn optional<T>(&mut self, parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>) -> ParseResult<Option<T>> 
+    pub fn optional<T>(&mut self, parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>) -> ParseResult<Option<T>> 
     {
         let cur = self.cur.clone();
         match parse(self) {
@@ -587,7 +554,7 @@ impl<R: Read> Parser<R> {
         }
     }
 
-    pub fn many<T>(&mut self, parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>) -> ParseResult<Vec<T>> 
+    pub fn many<T>(&mut self, parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>) -> ParseResult<Vec<T>> 
     {
         let mut v = Vec::new();
         loop {
@@ -607,7 +574,7 @@ impl<R: Read> Parser<R> {
         Ok(v)
     }
 
-    pub fn many_one<T>(&mut self, parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>) -> ParseResult<Vec<T>> 
+    pub fn many_one<T>(&mut self, parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>) -> ParseResult<Vec<T>> 
     {
         let mut first = true;
         let mut v = Vec::new();
@@ -632,7 +599,7 @@ impl<R: Read> Parser<R> {
         Ok(v)
     }
 
-    pub fn choice<T>(&mut self, parsers: Vec<&dyn Fn(&mut Parser<R>) -> ParseResult<T>>) -> ParseResult<T> 
+    pub fn choice<T>(&mut self, parsers: Vec<&dyn Fn(&mut Stream<R>) -> ParseResult<T>>) -> ParseResult<T> 
     {
         let cur = self.cur.clone();
         for p in parsers {
@@ -650,9 +617,9 @@ impl<R: Read> Parser<R> {
     }
 
     pub fn between<T>(&mut self,
-                      before: &dyn Fn(&mut Parser<R>) -> ParseResult<()>,
-                      parse:  &dyn Fn(&mut Parser<R>) -> ParseResult<T>,
-                      after:  &dyn Fn(&mut Parser<R>) -> ParseResult<()>) -> ParseResult<T>
+                      before: &dyn Fn(&mut Stream<R>) -> ParseResult<()>,
+                      parse:  &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
+                      after:  &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<T>
     {
         before(self)?;
         let r = parse(self)?;
@@ -661,8 +628,8 @@ impl<R: Read> Parser<R> {
     }
 
     pub fn until<T>(&mut self,
-                    parse:   &dyn Fn(&mut Parser<R>) -> ParseResult<T>,
-                    stopper: &dyn Fn(&mut Parser<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+                    parse:   &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
+                    stopper: &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
     {
         let mut v = Vec::new();
         loop {
@@ -686,8 +653,8 @@ impl<R: Read> Parser<R> {
     // sep_by: separated by sep, stops if sep fails, fails if parser fails
     //         but succeeds if first parser fails
     pub fn sep_by<T>(&mut self,
-                    parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>,
-                    sep:   &dyn Fn(&mut Parser<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+                    parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
+                    sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
     {
         let mut first = true;
         let mut v = Vec::new();
@@ -729,8 +696,8 @@ impl<R: Read> Parser<R> {
 
     // sep_by_one: same as sep by but must parse one
     pub fn sep_by_one<T>(&mut self,
-                         parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>,
-                         sep:   &dyn Fn(&mut Parser<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+                         parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
+                         sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
     {
         let mut v = Vec::new();
         loop {
@@ -763,8 +730,8 @@ impl<R: Read> Parser<R> {
 
     // end_by: separated and ended by sep, stop if parser fails, fails if sep fails
     pub fn end_by<T>(&mut self,
-                    parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>,
-                    sep:   &dyn Fn(&mut Parser<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+                    parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
+                    sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
     {
         let mut v = Vec::new();
         loop {
@@ -797,8 +764,8 @@ impl<R: Read> Parser<R> {
 
     // end_by_one: same as end_by but must parse one
     pub fn end_by_one<T>(&mut self,
-                         parse: &dyn Fn(&mut Parser<R>) -> ParseResult<T>,
-                         sep:   &dyn Fn(&mut Parser<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+                         parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
+                         sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
     {
         let mut first = true;
         let mut v = Vec::new();
@@ -835,103 +802,100 @@ impl<R: Read> Parser<R> {
         }
         Ok(v)
     }
-
-    // string, e.g. string("BEGIN")
-    // bytes, sequence of (potentially) non-unicode bytes
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io;
-    use std::iter::{repeat};
+    use std::iter::{once, repeat};
     // use std::assert_matches::assert_matches; // waiting for this one
     
-    fn tiny_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn tiny_stream() -> Stream<io::Cursor<Vec<u8>>> {
        let input: Vec<u8> = repeat('@' as u8).take(32).collect();
        println!("length: {}", input.len());
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
        )
     }
     
-    fn tiny_digit_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn tiny_digit_stream() -> Stream<io::Cursor<Vec<u8>>> {
        let input: Vec<u8> = vec![48, 49, 50, 51, 52, 53, 54, 55, 56, 57];
        println!("length: {}", input.len());
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
        )
     }
 
-    fn tiny_u16_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn tiny_u16_stream() -> Stream<io::Cursor<Vec<u8>>> {
        let s: String = repeat('ß').take(32).collect();
        let input = s.as_bytes().to_vec();
        println!("length: {}", input.len());
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
        )
     }
 
-    fn tiny_u32_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn tiny_u32_stream() -> Stream<io::Cursor<Vec<u8>>> {
        let s: String = repeat('京').take(32).collect();
        let input = s.as_bytes().to_vec();
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
        )
     }
 
-    fn tiny_ws_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn tiny_ws_stream() -> Stream<io::Cursor<Vec<u8>>> {
        let input: Vec<u8> = repeat(' ' as u8).take(8).chain(
                             repeat('@' as u8).take(8)).chain(
                             repeat(' ' as u8).take(4)).chain(
                             once('.'   as u8)).collect();
        println!("length: {}", input.len());
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
        )
     }
     
-    fn tiny_sep_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn tiny_sep_stream() -> Stream<io::Cursor<Vec<u8>>> {
        let input: Vec<u8> = once('@' as u8).chain(
                             once(',' as u8)).cycle().take(32).chain(
                             once('@' as u8)).collect();
        println!("length: {}: {:?}", input.len(), input);
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
        )
     }
     
-    fn tiny_end_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn tiny_end_stream() -> Stream<io::Cursor<Vec<u8>>> {
        let input: Vec<u8> = once('@' as u8).chain(
                             once(',' as u8)).cycle().take(32)
                             .collect();
        println!("length: {}: {:?}", input.len(), input);
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
        )
     }
 
-    fn curly_brackets_stream() -> Parser<io::Cursor<Vec<u8>>> {
+    fn curly_brackets_stream() -> Stream<io::Cursor<Vec<u8>>> {
         let input = vec!['{' as u8,
                          '1' as u8,
                          '2' as u8,
                          '3' as u8,
                          '}' as u8];
-       Parser::new(Opts::default()
+       Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
                    io::Cursor::new(input),
@@ -951,7 +915,7 @@ mod tests {
         assert!(match tiny_stream().byte('?' as u8) {
             Ok(()) => panic!("unexpected byte accepted"),
             Err(e) => match e {
-                           ParseError::ParseFailed(s) =>
+                           ParseError::Failed(s) =>
                                match s.strip_prefix("expected byte:") {
                                  Some(_) => true,
                                  _       => panic!("unexpected error: {}", s),
@@ -980,7 +944,7 @@ mod tests {
                 Ok(()) if i == 32 => panic!("1 byte too many!"),
                 Ok(()) => continue,
                 Err(e) if i == 32  => match e {
-                               ParseError::ParseFailed(s) if s == "end of file" => true,
+                               ParseError::Failed(s) if s == "end of file" => true,
                                _ => panic!("unexpected error: {:?}", e),
                           },
                 Err(e) => panic!("unexpected error: {:?} at {}", e, i),
@@ -1009,7 +973,7 @@ mod tests {
         assert!(match tiny_u16_stream().character('ö') {
             Ok(()) => panic!("unexpected char accepted"),
             Err(e) => match e {
-                           ParseError::ParseFailed(s) =>
+                           ParseError::Failed(s) =>
                                match s.strip_prefix("expected char:") {
                                  Some(_) => true,
                                  _       => panic!("unexpected error: {}", s),
@@ -1038,7 +1002,7 @@ mod tests {
                 Ok(()) if i == 32 => panic!("1 char too many!"),
                 Ok(()) => continue,
                 Err(e) if i == 32  => match e {
-                               ParseError::ParseFailed(s) if s == "end of file" => true,
+                               ParseError::Failed(s) if s == "end of file" => true,
                                _ => panic!("unexpected error: {:?}", e),
                           },
                 Err(e) => panic!("unexpected error: {:?} at {}", e, i),
@@ -1059,7 +1023,7 @@ mod tests {
         assert!(match tiny_u32_stream().character('中') {
             Ok(()) => panic!("unexpected char accepted"),
             Err(e) => match e {
-                           ParseError::ParseFailed(s) =>
+                           ParseError::Failed(s) =>
                                match s.strip_prefix("expected char:") {
                                  Some(_) => true,
                                  _       => panic!("unexpected error: {}", s),
@@ -1088,7 +1052,7 @@ mod tests {
                 Ok(()) if i == 32 => panic!("1 byte too many!"),
                 Ok(()) => continue,
                 Err(e) if i == 32  => match e {
-                               ParseError::ParseFailed(s) if s == "end of file" => true,
+                               ParseError::Failed(s) if s == "end of file" => true,
                                _ => panic!("unexpected error: {:?}", e),
                           },
                 Err(e) => panic!("unexpected error: {:?} at {}", e, i),
@@ -1133,7 +1097,7 @@ mod tests {
         });
 
         assert!(match s.whitespace() {
-            Err(ParseError::ParseFailed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s)) if s == "end of file" => true,
             Ok(()) => panic!("Ok but 'end of file' expected"),
             Err(e) => panic!("unexpected error: {:?}", e),
         });
@@ -1142,7 +1106,7 @@ mod tests {
     #[test]
     fn test_fail() {
         assert!(match tiny_stream().fail("we are failing deliberately") {
-            Err(ParseError::ParseFailed(s)) if s == "we are failing deliberately" => true,
+            Err(ParseError::Failed(s)) if s == "we are failing deliberately" => true,
             Err(e) => panic!("unexpected error: {:?}", e),
             Ok(_) => panic!("not failing on fail"),
         });
@@ -1177,7 +1141,7 @@ mod tests {
         }
 
         assert!(match s.any_byte() {
-            Err(ParseError::ParseFailed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s)) if s == "end of file" => true,
             Ok(ch) => panic!("OK but eof expected: {}", ch),
             Err(e) => panic!("error: {:?}", e),
         });
@@ -1215,13 +1179,13 @@ mod tests {
         }
 
         assert!(match s.peek_byte() {
-            Err(ParseError::ParseFailed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s)) if s == "end of file" => true,
             Ok(ch) => panic!("OK but eof expected: {}", ch),
             Err(e) => panic!("error: {:?}", e),
         });
 
         assert!(match s.any_byte() {
-            Err(ParseError::ParseFailed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s)) if s == "end of file" => true,
             Ok(ch) => panic!("OK but eof expected: {}", ch),
             Err(e) => panic!("error: {:?}", e),
         });
@@ -1274,7 +1238,7 @@ mod tests {
 
         assert!(match s.peek_bytes(4) {
             Ok(_) => panic!("Ok, but eof expected"),
-            Err(ParseError::ParseFailed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s)) if s == "end of file" => true,
             Err(e) => panic!("unexpected error: {:?}", e),
         });
     }
@@ -1289,7 +1253,7 @@ mod tests {
         });
         assert!(match s.peek_bytes(16) {
             Ok(_) => panic!("unexpected result"),
-            Err(ParseError::ParseFailed(s)) => 
+            Err(ParseError::Failed(s)) => 
                 match s.strip_prefix("parser needs more buffer space") {
                    Some(_) => true,
                    _ => panic!("unexpected error: {}", s),
@@ -1310,7 +1274,7 @@ mod tests {
         let mut w = tiny_ws_stream();
         assert!(match w.digit() {
                 Ok(n) => panic!("OK without digit in stream: {}", n),
-                Err(ParseError::ParseFailed(x)) =>
+                Err(ParseError::Failed(x)) =>
                     match x.strip_prefix("ascii digit expected") {
                         Some(_) => true,
                         _       => panic!("unexpected error: {}", x),
@@ -1335,75 +1299,16 @@ mod tests {
     }
 
     #[test]
-    fn test_attempt_digit() {
-        let mut t = tiny_stream();
-        let parse = |s: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<u8> { s.digit() };
-        assert!(match t.attempt(&parse) {
-            Ok(_) => panic!("OK without digit in stream"),
-            Err(ParseError::ParseFailed(x)) =>
-                match x.strip_prefix("ascii digit expected") {
-                    Some(_) => true,
-                    _       => panic!("unexpected error: {}", x),
-            },
-            Err(e) => panic!("unexpected error: {}", e),
-        });
-
-        // attempt did not consume anything
-        for _ in 0..32 {
-            assert!(match t.byte('@' as u8) {
-                Ok(()) => true,
-                Err(e) => panic!("error: {:?}", e),
-            });
-        }
-    }
-
-    #[test]
-    fn test_attempt2_digit() {
-        let mut t = tiny_stream();
-        fn parse(p: &mut Parser<io::Cursor<Vec<u8>>>) -> ParseResult<u8> {
-            p.digit()
-        }
-        // let parse = |s| { s.digit() };
-        assert!(match t.attempt2(parse) {
-            Ok(_) => panic!("OK without digit in stream"),
-            Err(ParseError::ParseFailed(x)) =>
-                match x.strip_prefix("ascii digit expected") {
-                    Some(_) => true,
-                    _       => panic!("unexpected error: {}", x),
-            },
-            Err(e) => panic!("unexpected error: {}", e),
-        });
-    }
-
-    #[test]
-    fn test_attempt_vec() {
-        let mut t = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<Vec<usize>> {
-            let mut v = Vec::with_capacity(32);
-            for i in 0 .. 32 {
-                p.byte('@' as u8)?;
-                v.push(i);
-            }
-            Ok(v)
-        };
-        assert!(match t.attempt(&parse) {
-            Ok(v) if v.len() == 32 => true,
-            Ok(v) => panic!("unexpected vector length: {}", v.len()),
-            Err(e) => panic!("unexpected error: {}", e),
-        });
-    }
-
-    #[test]
     fn test_curly_brackets() {
         let mut s = curly_brackets_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<(u8,u8,u8)> {
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<(u8,u8,u8)> {
             let a = p.digit()?;
             let b = p.digit()?;
             let c = p.digit()?;
             Ok((a,b,c))
         };
-        let before = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('{' as u8) };
-        let after  = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('}' as u8) };
+        let before = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('{' as u8) };
+        let after  = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('}' as u8) };
 
         assert!(match s.between(&before, &parse, &after) {
             Ok((49, 50, 51)) => true,
@@ -1415,7 +1320,7 @@ mod tests {
     #[test]
     fn test_many() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
         assert!(match s.many(&parse) {
             Ok(v) if v.len() == 32 => true,
             Ok(n) => panic!("unexpected value: {:?}", n),
@@ -1426,7 +1331,7 @@ mod tests {
     #[test]
     fn test_many_0() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
         assert!(match s.many(&parse) {
             Ok(v) if v.len() == 0 => true,
             Ok(n) => panic!("unexpected value: {:?}", n),
@@ -1445,7 +1350,7 @@ mod tests {
     #[test]
     fn test_many_one() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
         assert!(match s.many_one(&parse) {
             Ok(v) if v.len() == 32 => true,
             Ok(n) => panic!("unexpected value: {:?}", n),
@@ -1456,10 +1361,10 @@ mod tests {
     #[test]
     fn test_many_one_0() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
         assert!(match s.many_one(&parse) {
             Ok(n) => panic!("unexpected value: {:?}", n),
-            Err(ParseError::ParseFailed(e)) =>
+            Err(ParseError::Failed(e)) =>
                 match e.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", e),
@@ -1479,10 +1384,10 @@ mod tests {
     #[test]
     fn test_until() {
         let mut s = curly_brackets_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<u8> {
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<u8> {
             p.any_byte()
         };
-        let stop = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> {
+        let stop = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> {
             p.byte('}' as u8)
         };
         assert!(match s.until(&parse, &stop) {
@@ -1495,8 +1400,8 @@ mod tests {
     #[test]
     fn test_optional() {
         let mut s = tiny_stream();
-        let parse_ok = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let parse_fail = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let parse_ok = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let parse_fail = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
 
         assert!(match s.optional(&parse_ok) {
             Ok(Some(_)) => true,
@@ -1527,8 +1432,8 @@ mod tests {
     #[test]
     fn test_sep_by() {
         let mut s = tiny_sep_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 17 => true,
@@ -1540,8 +1445,8 @@ mod tests {
     #[test]
     fn test_sep_by_1() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 1 => true,
@@ -1553,8 +1458,8 @@ mod tests {
     #[test]
     fn test_sep_by_0() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('0' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('0' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 0 => true,
@@ -1566,8 +1471,8 @@ mod tests {
     #[test]
     fn test_sep_by_one() {
         let mut s = tiny_sep_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by_one(&parse, &sep) {
             Ok(v) if v.len() == 17 => true,
@@ -1579,8 +1484,8 @@ mod tests {
     #[test]
     fn test_sep_by_one_1() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 1 => true,
@@ -1592,12 +1497,12 @@ mod tests {
     #[test]
     fn test_sep_by_one_0() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('0' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('0' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by_one(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
-            Err(ParseError::ParseFailed(s)) => 
+            Err(ParseError::Failed(s)) => 
                 match s.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", s),
@@ -1609,8 +1514,8 @@ mod tests {
     #[test]
     fn test_end_by() {
         let mut s = tiny_end_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by(&parse, &sep) {
             Ok(v) if v.len() == 16 => true,
@@ -1622,12 +1527,12 @@ mod tests {
     #[test]
     fn test_no_end() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
-            Err(ParseError::ParseFailed(s)) => 
+            Err(ParseError::Failed(s)) => 
                 match s.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", s),
@@ -1639,8 +1544,8 @@ mod tests {
     #[test]
     fn test_end_by_0() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by(&parse, &sep) {
             Ok(v) if v.len() == 0 => true,
@@ -1652,12 +1557,12 @@ mod tests {
     #[test]
     fn test_end_by_one() {
         let mut s = tiny_stream();
-        let parse = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
-        let sep   = |p: &mut Parser<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by_one(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
-            Err(ParseError::ParseFailed(s)) => 
+            Err(ParseError::Failed(s)) => 
                 match s.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", s),
