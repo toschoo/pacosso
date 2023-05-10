@@ -15,7 +15,7 @@ impl Default for Opts {
     fn default() -> Opts {
         Opts {
             buf_size: 8192,
-            buf_num: 3,
+            buf_num: 5,
             max_stream: u32::MAX as u64,
         }
     }
@@ -111,6 +111,15 @@ fn err_expected_whitespace(have: u8) -> ParseError {
 fn err_not_a_digit(have: u8) -> ParseError {
     ParseError::Failed(format!(
        "ascii digit expected, have: {}", have))
+}
+
+fn err_utf8_error(have: Vec<u8>) -> ParseError {
+    ParseError::Failed(format!("utf8 encoding error in '{:?}'", have))
+}
+
+fn err_expected_string(expected: &str) -> ParseError {
+    ParseError::Failed(format!(
+        "expected string: {}", expected))
 }
 
 fn err_all_failed() -> ParseError {
@@ -346,6 +355,13 @@ impl<R: Read> Stream<R> {
         }
     }
 
+    fn check_excess(&self, n: usize) -> ParseResult<()> {
+        if n / self.opts.buf_size >= self.opts.buf_num - 1 {
+            return Err(err_exceeds_buffers(self.opts.buf_num, self.opts.buf_num - 1)); 
+        }
+        Ok(())
+    }
+
     pub fn succeed(&mut self) -> ParseResult<()> {
         Ok(())
     }
@@ -367,9 +383,10 @@ impl<R: Read> Stream<R> {
 
     pub fn byte(&mut self, ch: u8) -> ParseResult<()> {
         let cur = self.consume(1, false)?;
-        if self.get(cur) != ch {
+        let b = self.get(cur);
+        if b != ch {
             self.reset_cur(cur);
-            return Err(err_expected_byte(ch, self.get(cur)));
+            return Err(err_expected_byte(ch, b));
         }
 
         Ok(())
@@ -476,6 +493,87 @@ impl<R: Read> Stream<R> {
         Ok(())
     }
 
+    // string, e.g. string("BEGIN")
+    pub fn string(&mut self, pattern: &str) -> ParseResult<()> {
+        let v = pattern.bytes().collect();
+        // self.bytes(&v)
+        match self.bytes(&v) {
+            Ok(()) => Ok(()),
+            Err(ParseError::Failed(ref s)) => match s.strip_prefix("expected byte") {
+                Some(_) => return Err(err_expected_string(pattern)),
+                _ => return Err(ParseError::Failed(s.to_string())),
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // string_ic
+    pub fn string_ic(&mut self, pattern: &str) -> ParseResult<()> {
+        let n = pattern.len();
+        self.check_excess(n)?;
+        let cur = self.cur.clone();
+        let s = self.get_string(n)?;
+
+        if s.to_uppercase() != pattern.to_uppercase() {
+            self.reset_cur(cur);
+            return Err(err_expected_string(pattern));
+        }
+ 
+        Ok(())
+    }
+
+    // get next n bytes as string
+    pub fn get_string(&mut self, n: usize) -> ParseResult<String> {
+        self.check_excess(n)?;
+        let cur = self.cur.clone();
+        let v = self.get_bytes(n)?;
+        match str::from_utf8(&v) {
+            Ok(s)  => return Ok(s.to_string()),
+            Err(std::str::Utf8Error{..}) => {
+                self.reset_cur(cur);
+                return Err(err_utf8_error(v));
+            },
+        }
+    }
+
+    // bytes, sequence of (potentially) non-unicode bytes
+    pub fn bytes(&mut self, pattern: &Vec<u8>) -> ParseResult<()> {
+        let n = pattern.len();
+        self.check_excess(n)?;
+        let mut cur = self.cur.clone();
+        let sav = cur.clone();
+        self.consume(n, false)?;
+        for c in pattern {
+            let b = self.get(cur);
+            if *c != self.get(cur) {
+               self.reset_cur(sav);
+               return Err(err_expected_byte(*c, b));
+            }
+            self.advance_this(&mut cur, 1);
+        }
+        Ok(())
+    }
+
+    // bytes, sequence of (potentially) non-unicode bytes
+    pub fn get_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
+
+        self.check_excess(n)?;
+        let mut cur = self.cur.clone();
+        self.consume(n, false)?;
+
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            v.push(self.get(cur)); 
+            self.advance_this(&mut cur, 1);
+        }
+        Ok(v)
+    }
+
+    // binary object size = buf.len()
+    pub fn blob(&mut self, buf: Vec<u8>) -> ParseResult<()> {
+        return Err(err_not_impl());
+    }
+
     pub fn peek_byte(&mut self) -> ParseResult<u8> {
         let cur = self.consume(1, true)?;
         // println!("peeking {}.{}", cur.buf, cur.pos);
@@ -489,9 +587,8 @@ impl<R: Read> Stream<R> {
     }
 
     pub fn peek_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
-        if n / self.opts.buf_size >= self.opts.buf_num - 1 {
-            return Err(err_exceeds_buffers(self.opts.buf_num, self.opts.buf_num - 1)); 
-        }
+
+        self.check_excess(n)?;
 
         let mut cur = self.consume(n, true)?;
         let sav = cur.clone();
@@ -509,31 +606,6 @@ impl<R: Read> Stream<R> {
     }
 
     pub fn peek_string(&mut self, n: usize) -> ParseResult<String> {
-        return Err(err_not_impl());
-    }
-
-    // string, e.g. string("BEGIN")
-    pub fn string(&mut self, pattern: &str) -> ParseResult<()> {
-        return Err(err_not_impl());
-    }
-
-    // string, e.g. s.get_string()
-    pub fn get_string(&mut self, n: usize) -> ParseResult<String> {
-        return Err(err_not_impl());
-    }
-
-    // bytes, sequence of (potentially) non-unicode bytes
-    pub fn bytes(&mut self, pattern: Vec<u8>) -> ParseResult<()> {
-        return Err(err_not_impl());
-    }
-
-    // bytes, sequence of (potentially) non-unicode bytes
-    pub fn get_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
-        return Err(err_not_impl());
-    }
-
-    // binary object size = buf.len()
-    pub fn blob(&mut self, buf: Vec<u8>) -> ParseResult<()> {
         return Err(err_not_impl());
     }
 
@@ -895,6 +967,15 @@ mod tests {
                          '2' as u8,
                          '3' as u8,
                          '}' as u8];
+       Stream::new(Opts::default()
+                   .set_buf_size(8)
+                   .set_buf_num(3),
+                   io::Cursor::new(input),
+       )
+    }
+
+    fn pascal_stream() -> Stream<io::Cursor<String>> {
+       let input = "IF something THEN BEGIN do_something(); END IF".to_string();
        Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
@@ -1567,6 +1648,91 @@ mod tests {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", s),
             },
+            Err(e) => panic!("unexpected error: {:?}", e),
+        });
+    }
+
+    #[test]
+    fn test_string() {
+        let mut s = pascal_stream();
+        let parse = |p: &mut Stream<io::Cursor<String>>| -> ParseResult<()> { 
+            p.string("IF")?;
+            p.whitespace()?;
+            p.string("something")?;
+            p.whitespace()?;
+            p.string("THEN")?;
+            p.whitespace()?;
+            p.string("BEGIN")?;
+            p.whitespace()?;
+            p.string("do_something()")?;
+            let _ = p.whitespace();
+            p.byte(';' as u8)?;
+            p.whitespace()?;
+            p.string("END")?;
+            p.whitespace()?;
+            p.string("IF")?;
+            Ok(())
+        };
+        assert!(match parse(&mut s) {
+            Ok(()) => true,
+            Err(e) => panic!("unexpected error: {:?}", e),
+        });
+    }
+
+    #[test]
+    fn test_string_fail() {
+        let mut s = pascal_stream();
+        let parse = |p: &mut Stream<io::Cursor<String>>| -> ParseResult<()> { 
+            p.string("IF")?;
+            p.whitespace()?;
+            p.string("something")?;
+            p.whitespace()?;
+            p.string("then")?;
+            p.whitespace()?;
+            p.string("BEGIN")?;
+            p.whitespace()?;
+            p.string("do_something()")?;
+            let _ = p.whitespace();
+            p.byte(';' as u8)?;
+            p.whitespace()?;
+            p.string("END")?;
+            p.whitespace()?;
+            p.string("IF")?;
+            Ok(())
+        };
+        assert!(match parse(&mut s) {
+            Ok(()) => panic!("lowercase accepted as uppercase"),
+            Err(ParseError::Failed(e)) => match e.strip_prefix("expected string:") {
+                Some(_) => true,
+                _       => panic!("unexpected error: {:?}", e),
+            },
+            Err(e) => panic!("unexpected error: {:?}", e),
+        });
+    }
+
+    #[test]
+    fn test_string_ic() {
+        let mut s = pascal_stream();
+        let parse = |p: &mut Stream<io::Cursor<String>>| -> ParseResult<()> { 
+            p.string_ic("IF")?;
+            p.whitespace()?;
+            p.string("something")?;
+            p.whitespace()?;
+            p.string_ic("then")?;
+            p.whitespace()?;
+            p.string_ic("Begin")?;
+            p.whitespace()?;
+            p.string_ic("do_Something()")?;
+            let _ = p.whitespace();
+            p.string_ic(";")?;
+            p.whitespace()?;
+            p.string_ic("END")?;
+            p.whitespace()?;
+            p.string_ic("IF")?;
+            Ok(())
+        };
+        assert!(match parse(&mut s) {
+            Ok(()) => true,
             Err(e) => panic!("unexpected error: {:?}", e),
         });
     }
