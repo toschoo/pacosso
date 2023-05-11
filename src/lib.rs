@@ -141,8 +141,8 @@ struct Cursor {
     lpos: u64,
 }
 
-pub struct Stream<R: Read> {
-    reader: R,
+pub struct Stream<'a, R: Read> {
+    reader: &'a mut R,
     bufs: Vec<Buf>,
     valid: Vec<bool>,
     cur: Cursor,
@@ -154,8 +154,8 @@ pub struct Stream<R: Read> {
 
 type Buf = Vec<u8>;
 
-impl<R: Read> Stream<R> {
-    pub fn new(opts: Opts, reader: R) -> Stream<R> {
+impl<'a, R: Read> Stream<'a, R> {
+    pub fn new(opts: Opts, reader: &'a mut R) -> Stream<R> {
        let mut buf = Vec::with_capacity(opts.buf_num);
        for _ in 0..opts.buf_num {
            buf.push(vec!(0; opts.buf_size));
@@ -457,7 +457,37 @@ impl<R: Read> Stream<R> {
             self.reset_cur(cur);
             return Err(err_not_a_digit(ch));
         }
-        Ok(ch)
+        Ok(ch) // should we return digits as numbers?
+    }
+
+    // digits: read while we're seeing digits
+    pub fn digits(&mut self) -> ParseResult<Vec<u8>> {
+        let mut first = true;
+        let mut v = Vec::new();
+        loop {
+
+            // we don't want to fail on eof if we read at least one digit 
+            let cur = match self.consume(1, false) {
+                Ok(c) => c,
+                Err(ParseError::Failed(s)) if !first && s == "end of file" => break,
+                Err(e) => return Err(e),
+            };
+
+            let ch = self.get(cur);
+
+            if ch < 48 || ch > 57 {
+                self.reset_cur(cur);
+                if first {
+                    return Err(err_not_a_digit(ch));
+                }
+                break;
+            }
+
+            first = false;
+            v.push(ch);
+        }
+
+        Ok(v)
     }
 
     // default whitespace: ' ', '\n', '\t'
@@ -571,6 +601,11 @@ impl<R: Read> Stream<R> {
 
     // binary object size = buf.len()
     pub fn blob(&mut self, buf: Vec<u8>) -> ParseResult<()> {
+        return Err(err_not_impl());
+    }
+
+    // get everything in the buffers out
+    pub fn drain(&mut self) -> ParseResult<Vec<u8>> {
         return Err(err_not_impl());
     }
 
@@ -882,110 +917,123 @@ mod tests {
     use std::io;
     use std::iter::{once, repeat};
     // use std::assert_matches::assert_matches; // waiting for this one
-    
-    fn tiny_stream() -> Stream<io::Cursor<Vec<u8>>> {
-       let input: Vec<u8> = repeat('@' as u8).take(32).collect();
-       println!("length: {}", input.len());
+
+    type Input = io::Cursor<Vec<u8>>;
+    type ByteStream<'a> = Stream<'a, Input>;
+
+    fn to_stream(input: &mut Input) -> ByteStream {
        Stream::new(Opts::default()
                    .set_buf_size(8)
                    .set_buf_num(3),
-                   io::Cursor::new(input),
-       )
+                   input)
     }
     
-    fn tiny_digit_stream() -> Stream<io::Cursor<Vec<u8>>> {
-       let input: Vec<u8> = vec![48, 49, 50, 51, 52, 53, 54, 55, 56, 57];
-       println!("length: {}", input.len());
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
+    fn tiny_stream() -> Input {
+       Input::new(repeat('@' as u8).take(32).collect())
+    }
+ 
+    fn tiny_digit_stream() -> Input {
+       Input::new(vec![48, 49, 50, 51, 52, 53, 54, 55, 56, 57])
+    }
+ 
+    fn tiny_alphanum_stream() -> Input {
+       Input::new(vec![48, 49, 50, 51, 52, 53, 65, 54, 55, 56, 57])
+    }
+
+    fn tiny_u16_stream() -> Input {
+       Input::new(repeat('ß').take(32).collect::<String>()
+                      .as_bytes().to_vec()
        )
     }
 
-    fn tiny_u16_stream() -> Stream<io::Cursor<Vec<u8>>> {
-       let s: String = repeat('ß').take(32).collect();
-       let input = s.as_bytes().to_vec();
-       println!("length: {}", input.len());
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
+
+    fn tiny_u32_stream() -> Input {
+       Input::new(repeat('京').take(32).collect::<String>()
+                  .as_bytes().to_vec()
        )
     }
 
-    fn tiny_u32_stream() -> Stream<io::Cursor<Vec<u8>>> {
-       let s: String = repeat('京').take(32).collect();
-       let input = s.as_bytes().to_vec();
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
-       )
-    }
-
-    fn tiny_ws_stream() -> Stream<io::Cursor<Vec<u8>>> {
-       let input: Vec<u8> = repeat(' ' as u8).take(8).chain(
-                            repeat('@' as u8).take(8)).chain(
-                            repeat(' ' as u8).take(4)).chain(
-                            once('.'   as u8)).collect();
-       println!("length: {}", input.len());
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
+    fn tiny_ws_stream() -> Input {
+       Input::new(repeat(' ' as u8).take(8).chain(
+                  repeat('@' as u8).take(8)).chain(
+                  repeat(' ' as u8).take(4)).chain(
+                  once('.'   as u8)).collect()
        )
     }
     
-    fn tiny_sep_stream() -> Stream<io::Cursor<Vec<u8>>> {
-       let input: Vec<u8> = once('@' as u8).chain(
-                            once(',' as u8)).cycle().take(32).chain(
-                            once('@' as u8)).collect();
-       println!("length: {}: {:?}", input.len(), input);
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
-       )
-    }
-    
-    fn tiny_end_stream() -> Stream<io::Cursor<Vec<u8>>> {
-       let input: Vec<u8> = once('@' as u8).chain(
-                            once(',' as u8)).cycle().take(32)
-                            .collect();
-       println!("length: {}: {:?}", input.len(), input);
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
+    fn tiny_sep_stream() -> Input {
+       Input::new(once('@' as u8).chain(
+                  once(',' as u8)).cycle().take(32).chain(
+                  once('@' as u8)).collect()
        )
     }
 
-    fn curly_brackets_stream() -> Stream<io::Cursor<Vec<u8>>> {
-        let input = vec!['{' as u8,
+    fn curly_brackets_stream() -> Input {
+        Input::new(vec!['{' as u8,
                          '1' as u8,
                          '2' as u8,
                          '3' as u8,
-                         '}' as u8];
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
+                         '}' as u8]
+       )
+    }
+    
+    fn tiny_end_stream() -> Input {
+       Input::new(once('@' as u8).chain(
+                  once(',' as u8)).cycle().take(32)
+                  .collect()
        )
     }
 
-    fn pascal_stream() -> Stream<io::Cursor<String>> {
-       let input = "IF something THEN BEGIN do_something(); END IF".to_string();
-       Stream::new(Opts::default()
-                   .set_buf_size(8)
-                   .set_buf_num(3),
-                   io::Cursor::new(input),
+    fn pascal_stream() -> Input {
+       Input::new("IF something THEN BEGIN do_something(); END IF"
+                   .to_string()
+                   .as_bytes()
+                   .to_vec()
        )
     }
 
     #[test]
+    fn test_succeed() {
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.succeed() {
+            Ok(_) => true,
+            Err(e) => panic!("unexpected error: {:?}", e),
+        });
+    }
+
+    #[test]
+    fn test_fail() {
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.fail("we are failing deliberately") {
+            Err(ParseError::Failed(s)) if s == "we are failing deliberately" => true,
+            Err(e) => panic!("unexpected error: {:?}", e),
+            Ok(_) => panic!("not failing on fail"),
+        });
+    }
+
+    #[test]
+    fn test_eof() {
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        for _ in 0..32 {
+            assert!(match s.byte('@' as u8) {
+                Ok(()) => true,
+                Err(e) => panic!("error: {:?}", e),
+            });
+        }
+        assert!(match s.eof() {
+            Ok(()) => true,
+            Err(e) => panic!("error: {:?}", e),
+        });
+    }
+
+    #[test]
     fn test_expected_byte() {
-        assert!(match tiny_stream().byte('@' as u8) {
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.byte('@' as u8) {
             Ok(()) => true,
             Err(e) => panic!("error: {:?}", e),
         })
@@ -993,7 +1041,9 @@ mod tests {
 
     #[test]
     fn test_unexpected_byte() {
-        assert!(match tiny_stream().byte('?' as u8) {
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.byte('?' as u8) {
             Ok(()) => panic!("unexpected byte accepted"),
             Err(e) => match e {
                            ParseError::Failed(s) =>
@@ -1008,7 +1058,8 @@ mod tests {
 
     #[test]
     fn test_32_expected_bytes() {
-        let mut s = tiny_stream();
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
         for _ in 0..32 {
             assert!(match s.byte('@' as u8) {
                 Ok(()) => true,
@@ -1019,7 +1070,8 @@ mod tests {
 
     #[test]
     fn test_33_expected_bytes() {
-        let mut s = tiny_stream();
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
         for i in 0..33 {
             assert!(match s.byte('@' as u8) {
                 Ok(()) if i == 32 => panic!("1 byte too many!"),
@@ -1035,7 +1087,9 @@ mod tests {
 
     #[test]
     fn test_expected_char() {
-        assert!(match tiny_stream().character('@') {
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.character('@') {
             Ok(()) => true,
             Err(e) => panic!("error: {:?}", e),
         })
@@ -1043,7 +1097,9 @@ mod tests {
 
     #[test]
     fn test_expected_u16_char() {
-        assert!(match tiny_u16_stream().character('ß') {
+        let mut input = tiny_u16_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.character('ß') {
             Ok(()) => true,
             Err(e) => panic!("error: {:?}", e),
         })
@@ -1051,7 +1107,9 @@ mod tests {
 
     #[test]
     fn test_unexpected_u16_char() {
-        assert!(match tiny_u16_stream().character('ö') {
+        let mut input = tiny_u16_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.character('ö') {
             Ok(()) => panic!("unexpected char accepted"),
             Err(e) => match e {
                            ParseError::Failed(s) =>
@@ -1066,7 +1124,8 @@ mod tests {
 
     #[test]
     fn test_32_expected_chars() {
-        let mut s = tiny_u16_stream();
+        let mut input = tiny_u16_stream();
+        let mut s = to_stream(&mut input);
         for _ in 0..32 {
             assert!(match s.character('ß') {
                 Ok(()) => true,
@@ -1077,7 +1136,8 @@ mod tests {
 
     #[test]
     fn test_33_expected_chars() {
-        let mut s = tiny_u16_stream();
+        let mut input = tiny_u16_stream();
+        let mut s = to_stream(&mut input);
         for i in 0..33 {
             assert!(match s.character('ß') {
                 Ok(()) if i == 32 => panic!("1 char too many!"),
@@ -1093,7 +1153,9 @@ mod tests {
 
     #[test]
     fn test_expected_u32_char() {
-        assert!(match tiny_u32_stream().character('京') {
+        let mut input = tiny_u32_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.character('京') {
             Ok(()) => true,
             Err(e) => panic!("error: {:?}", e),
         })
@@ -1101,7 +1163,9 @@ mod tests {
 
     #[test]
     fn test_unexpected_u32_char() {
-        assert!(match tiny_u32_stream().character('中') {
+        let mut input = tiny_u32_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.character('中') {
             Ok(()) => panic!("unexpected char accepted"),
             Err(e) => match e {
                            ParseError::Failed(s) =>
@@ -1116,7 +1180,8 @@ mod tests {
 
     #[test]
     fn test_32_expected_u32_chars() {
-        let mut s = tiny_u32_stream();
+        let mut input = tiny_u32_stream();
+        let mut s = to_stream(&mut input);
         for i in 0..32 {
             assert!(match s.character('京') {
                 Ok(()) => true,
@@ -1127,7 +1192,8 @@ mod tests {
 
     #[test]
     fn test_33_expected_u32_char() {
-        let mut s = tiny_u32_stream();
+        let mut input = tiny_u32_stream();
+        let mut s = to_stream(&mut input);
         for i in 0..33 {
             assert!(match s.character('京') {
                 Ok(()) if i == 32 => panic!("1 byte too many!"),
@@ -1143,7 +1209,8 @@ mod tests {
 
     #[test]
     fn test_whitespace() {
-        let mut s = tiny_ws_stream();
+        let mut input = tiny_ws_stream();
+        let mut s = to_stream(&mut input);
         
         assert!(match s.whitespace() {
             Ok(()) => true,
@@ -1170,7 +1237,8 @@ mod tests {
 
     #[test]
     fn test_my_whitespace() {
-        let mut s = tiny_stream();
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
         s.set_whitespace(vec![' ' as u8, '\n' as u8, '@' as u8]);
         assert!(match s.whitespace() {
             Ok(()) => true,
@@ -1185,25 +1253,10 @@ mod tests {
     }
 
     #[test]
-    fn test_fail() {
-        assert!(match tiny_stream().fail("we are failing deliberately") {
-            Err(ParseError::Failed(s)) if s == "we are failing deliberately" => true,
-            Err(e) => panic!("unexpected error: {:?}", e),
-            Ok(_) => panic!("not failing on fail"),
-        });
-    }
-
-    #[test]
-    fn test_succeed() {
-        assert!(match tiny_stream().succeed() {
-            Ok(_) => true,
-            Err(e) => panic!("unexpected error: {:?}", e),
-        });
-    }
-
-    #[test]
     fn test_any_byte() {
-        assert!(match tiny_stream().any_byte() {
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.any_byte() {
             Ok(64) => true, // 64 = @
             Ok(ch) => panic!("unexpected byte: {}", ch),
             Err(e) => panic!("error: {:?}", e),
@@ -1212,7 +1265,8 @@ mod tests {
 
     #[test]
     fn test_many_bytes() {
-        let mut s = tiny_stream();
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
         for _ in 0 .. 32 {
             assert!(match s.any_byte() {
                 Ok(64) => true, // 64 = @
@@ -1230,7 +1284,8 @@ mod tests {
 
     #[test]
     fn test_peek_byte() {
-        let mut s = tiny_stream();
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
         for _ in 0 .. 32 {
             assert!(match s.peek_byte() {
                 Ok(64) => true, // 64 = @
@@ -1274,7 +1329,8 @@ mod tests {
 
     #[test]
     fn test_peek_bytes() {
-        let mut s = tiny_stream();
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
         for _ in 0 .. 32 {
             assert!(match s.peek_bytes(4) {
                 Ok(v) if v.len() == 4 => true,
@@ -1326,7 +1382,8 @@ mod tests {
 
     #[test]
     fn test_peek_too_many_bytes() {
-        let mut s = tiny_stream();
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
         assert!(match s.peek_bytes(15) {
             Ok(v) if v.len() == 15 => true,
             Ok(_) => panic!("unexpected result"),
@@ -1345,14 +1402,16 @@ mod tests {
 
     #[test]
     fn test_digit() {
-        let mut s = tiny_digit_stream();
+        let mut input = tiny_digit_stream();
+        let mut s = to_stream(&mut input);
         for i in 0 .. 10 {
             assert!(match s.digit() {
                 Ok(n) => n == i + 48, 
                 Err(e) => panic!("unexpected error: {}", e),
             });
         }
-        let mut w = tiny_ws_stream();
+        let mut input2 = tiny_ws_stream();
+        let mut w = to_stream(&mut input2);
         assert!(match w.digit() {
                 Ok(n) => panic!("OK without digit in stream: {}", n),
                 Err(ParseError::Failed(x)) =>
@@ -1365,31 +1424,30 @@ mod tests {
     }
 
     #[test]
-    fn test_eof() {
-        let mut s = tiny_stream();
-        for _ in 0..32 {
-            assert!(match s.byte('@' as u8) {
-                Ok(()) => true,
-                Err(e) => panic!("error: {:?}", e),
-            });
-        }
-        assert!(match s.eof() {
-            Ok(()) => true,
-            Err(e) => panic!("error: {:?}", e),
+    fn test_digits() {
+        let mut input = tiny_alphanum_stream();
+        let mut s = to_stream(&mut input);
+        assert!(match s.digits() {
+            Ok(v) => match v[..] {
+                 [48, 49, 50, 51, 52, 53] => true,
+                 _ => panic!("unexpected result"),
+            },
+            Err(e) => panic!("unexpected error: {:?}", e),
         });
     }
 
     #[test]
     fn test_curly_brackets() {
-        let mut s = curly_brackets_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<(u8,u8,u8)> {
+        let mut input = curly_brackets_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<(u8,u8,u8)> {
             let a = p.digit()?;
             let b = p.digit()?;
             let c = p.digit()?;
             Ok((a,b,c))
         };
-        let before = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('{' as u8) };
-        let after  = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('}' as u8) };
+        let before = |p: &mut ByteStream| -> ParseResult<()> { p.byte('{' as u8) };
+        let after  = |p: &mut ByteStream| -> ParseResult<()> { p.byte('}' as u8) };
 
         assert!(match s.between(&before, &parse, &after) {
             Ok((49, 50, 51)) => true,
@@ -1400,8 +1458,9 @@ mod tests {
 
     #[test]
     fn test_many() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
         assert!(match s.many(&parse) {
             Ok(v) if v.len() == 32 => true,
             Ok(n) => panic!("unexpected value: {:?}", n),
@@ -1411,8 +1470,9 @@ mod tests {
 
     #[test]
     fn test_many_0() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('o' as u8) };
         assert!(match s.many(&parse) {
             Ok(v) if v.len() == 0 => true,
             Ok(n) => panic!("unexpected value: {:?}", n),
@@ -1430,8 +1490,9 @@ mod tests {
 
     #[test]
     fn test_many_one() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
         assert!(match s.many_one(&parse) {
             Ok(v) if v.len() == 32 => true,
             Ok(n) => panic!("unexpected value: {:?}", n),
@@ -1441,8 +1502,9 @@ mod tests {
 
     #[test]
     fn test_many_one_0() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('o' as u8) };
         assert!(match s.many_one(&parse) {
             Ok(n) => panic!("unexpected value: {:?}", n),
             Err(ParseError::Failed(e)) =>
@@ -1464,11 +1526,12 @@ mod tests {
 
     #[test]
     fn test_until() {
-        let mut s = curly_brackets_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<u8> {
+        let mut input = curly_brackets_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<u8> {
             p.any_byte()
         };
-        let stop = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> {
+        let stop = |p: &mut ByteStream| -> ParseResult<()> {
             p.byte('}' as u8)
         };
         assert!(match s.until(&parse, &stop) {
@@ -1480,9 +1543,10 @@ mod tests {
 
     #[test]
     fn test_optional() {
-        let mut s = tiny_stream();
-        let parse_ok = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let parse_fail = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse_ok = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
+        let parse_fail = |p: &mut ByteStream| -> ParseResult<()> { p.byte('o' as u8) };
 
         assert!(match s.optional(&parse_ok) {
             Ok(Some(_)) => true,
@@ -1512,9 +1576,10 @@ mod tests {
 
     #[test]
     fn test_sep_by() {
-        let mut s = tiny_sep_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_sep_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 17 => true,
@@ -1525,9 +1590,10 @@ mod tests {
 
     #[test]
     fn test_sep_by_1() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 1 => true,
@@ -1538,9 +1604,10 @@ mod tests {
 
     #[test]
     fn test_sep_by_0() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('0' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('0' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 0 => true,
@@ -1551,9 +1618,10 @@ mod tests {
 
     #[test]
     fn test_sep_by_one() {
-        let mut s = tiny_sep_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_sep_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by_one(&parse, &sep) {
             Ok(v) if v.len() == 17 => true,
@@ -1564,9 +1632,10 @@ mod tests {
 
     #[test]
     fn test_sep_by_one_1() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by(&parse, &sep) {
             Ok(v) if v.len() == 1 => true,
@@ -1577,9 +1646,10 @@ mod tests {
 
     #[test]
     fn test_sep_by_one_0() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('0' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('0' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.sep_by_one(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
@@ -1594,9 +1664,10 @@ mod tests {
 
     #[test]
     fn test_end_by() {
-        let mut s = tiny_end_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_end_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by(&parse, &sep) {
             Ok(v) if v.len() == 16 => true,
@@ -1607,9 +1678,10 @@ mod tests {
 
     #[test]
     fn test_no_end() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('@' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('@' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
@@ -1624,9 +1696,10 @@ mod tests {
 
     #[test]
     fn test_end_by_0() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('o' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by(&parse, &sep) {
             Ok(v) if v.len() == 0 => true,
@@ -1637,9 +1710,10 @@ mod tests {
 
     #[test]
     fn test_end_by_one() {
-        let mut s = tiny_stream();
-        let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte('o' as u8) };
-        let sep   = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> { p.byte(',' as u8) };
+        let mut input = tiny_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('o' as u8) };
+        let sep   = |p: &mut ByteStream| -> ParseResult<()> { p.byte(',' as u8) };
 
         assert!(match s.end_by_one(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
@@ -1654,8 +1728,9 @@ mod tests {
 
     #[test]
     fn test_string() {
-        let mut s = pascal_stream();
-        let parse = |p: &mut Stream<io::Cursor<String>>| -> ParseResult<()> { 
+        let mut input = pascal_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { 
             p.string("IF")?;
             p.whitespace()?;
             p.string("something")?;
@@ -1681,8 +1756,9 @@ mod tests {
 
     #[test]
     fn test_string_fail() {
-        let mut s = pascal_stream();
-        let parse = |p: &mut Stream<io::Cursor<String>>| -> ParseResult<()> { 
+        let mut input = pascal_stream();
+        let mut s = to_stream(&mut input);
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { 
             p.string("IF")?;
             p.whitespace()?;
             p.string("something")?;
@@ -1712,8 +1788,10 @@ mod tests {
 
     #[test]
     fn test_string_ic() {
-        let mut s = pascal_stream();
-        let parse = |p: &mut Stream<io::Cursor<String>>| -> ParseResult<()> { 
+        let mut input = pascal_stream();
+        let mut s = to_stream(&mut input);
+        let skip_whitespace = |p: &mut ByteStream| -> ParseResult<()> { p.whitespace() };
+        let parse = |p: &mut ByteStream| -> ParseResult<()> { 
             p.string_ic("IF")?;
             p.whitespace()?;
             p.string("something")?;
@@ -1723,7 +1801,7 @@ mod tests {
             p.string_ic("Begin")?;
             p.whitespace()?;
             p.string_ic("do_Something()")?;
-            let _ = p.whitespace();
+            p.optional(&skip_whitespace)?;
             p.string_ic(";")?;
             p.whitespace()?;
             p.string_ic("END")?;
