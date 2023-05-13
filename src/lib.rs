@@ -55,7 +55,7 @@ impl Opts {
     }
 }
 
-type ParseResult<T> = Result<T, ParseError>;
+pub type ParseResult<T> = Result<T, ParseError>;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -96,6 +96,11 @@ fn err_exceeds_buffers(needed: usize, have: usize) -> ParseError {
 fn err_expected_byte(expected: u8, have: u8) -> ParseError {
     ParseError::Failed(format!(
        "expected byte: {}, have: {}", expected, have))
+}
+
+fn err_expected_one_of_bytes(expected: &[u8]) -> ParseError {
+    ParseError::Failed(format!(
+       "expected one of the bytes: {:?}", expected))
 }
 
 fn err_expected_char(expected: char) -> ParseError {
@@ -297,13 +302,19 @@ impl<'a, R: Read> Stream<'a, R> {
         }
 
         /*
-        println!("next buffer: {} is valid: {}"
+        println!("next buffer: {} is valid: {} (eof: {}, pos: {} of {})"
                  , (self.cur.buf + 1) % self.opts.buf_num
                  , self.valid[(self.cur.buf + 1) % self.opts.buf_num]
+                 , self.eof
+                 , self.cur.pos
+                 , self.bufs[self.cur.buf].len()
         );
         */
 
-        if self.eof && self.cur.pos >= self.bufs[self.cur.buf].len() &&
+        let d = self.bufs[self.cur.buf].len() - self.cur.pos;
+
+        // if self.eof && self.cur.pos + n - 1 >= self.bufs[self.cur.buf].len() &&
+        if self.eof && n > d &&
            !self.valid[(self.cur.buf + 1) % self.opts.buf_num]
         {
             return Err(err_eof());
@@ -366,7 +377,7 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
-    pub fn fail(&mut self, msg: &str) -> ParseResult<()> {
+    pub fn fail<T>(&mut self, msg: &str, dummy: T) -> ParseResult<T> {
         Err(ParseError::Failed(msg.to_string()))
     }
 
@@ -390,6 +401,20 @@ impl<'a, R: Read> Stream<'a, R> {
         }
 
         Ok(())
+    }
+
+    pub fn one_of_bytes(&mut self, bs: &[u8]) -> ParseResult<()> {
+        for b in bs {
+            match self.byte(*b) {
+                Ok(()) => return Ok(()),
+                Err(ParseError::Failed(x)) => match x.strip_prefix("expected byte:") {
+                    Some(_) => continue,
+                    None => return Err(ParseError::Failed(x)),
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(err_expected_one_of_bytes(bs))
     }
 
     pub fn character(&mut self, ch: char) -> ParseResult<()> {
@@ -523,6 +548,12 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
+    // like whitespace, but always succeeds
+    pub fn skip_whitespace(&mut self) -> ParseResult<()> {
+        let _ = self.whitespace();
+        Ok(())
+    }
+
     // string, e.g. string("BEGIN")
     pub fn string(&mut self, pattern: &str) -> ParseResult<()> {
         let v = pattern.bytes().collect();
@@ -567,6 +598,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     // bytes, sequence of (potentially) non-unicode bytes
+    // vector or slice?
     pub fn bytes(&mut self, pattern: &Vec<u8>) -> ParseResult<()> {
         let n = pattern.len();
         self.check_excess(n)?;
@@ -575,7 +607,7 @@ impl<'a, R: Read> Stream<'a, R> {
         self.consume(n, false)?;
         for c in pattern {
             let b = self.get(cur);
-            if *c != self.get(cur) {
+            if *c != b {
                self.reset_cur(sav);
                return Err(err_expected_byte(*c, b));
             }
@@ -1006,7 +1038,7 @@ mod tests {
     fn test_fail() {
         let mut input = tiny_stream();
         let mut s = to_stream(&mut input);
-        assert!(match s.fail("we are failing deliberately") {
+        assert!(match s.fail("we are failing deliberately", ()) {
             Err(ParseError::Failed(s)) if s == "we are failing deliberately" => true,
             Err(e) => panic!("unexpected error: {:?}", e),
             Ok(_) => panic!("not failing on fail"),
