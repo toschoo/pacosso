@@ -76,63 +76,136 @@ impl fmt::Display for ParseError {
     }
 }
 
-fn err_not_impl() -> ParseError {
+impl ParseError {
+
+    pub fn is_parse_error(&self) -> bool {
+        match self {
+            ParseError::Failed(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_io_error(&self) -> bool {
+        match self {
+            ParseError::IOError(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_fatal(&self) -> bool {
+        match self {
+            ParseError::Fatal(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_error_type(&self, pattern: &str) -> bool {
+        match self {
+            ParseError::Failed(x) => match x.strip_prefix(pattern) {
+                Some(_) => return true,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+
+    pub fn is_eof(&self) -> bool {
+        match self {
+            ParseError::Failed(s) if s == "end of file" => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_expected_token(&self) -> bool {
+        match self {
+            ParseError::Failed(s) =>
+                match s.strip_prefix("expected") {
+                  Some(_) => true,
+                   _ => false,
+                },
+            _ => false,
+        }
+    }
+
+    pub fn is_utf8_error(&self) -> bool {
+        match self {
+            ParseError::Failed(s) =>
+                match s.strip_prefix("utf8") {
+                    Some(_) => true,
+                    _ => false,
+                },
+            _ => false,
+        }
+    }
+}
+
+pub fn err_not_impl() -> ParseError {
     ParseError::Failed("not yet implemented".to_string())
 }
 
-fn err_eof() -> ParseError {
+pub fn err_eof() -> ParseError {
     ParseError::Failed("end of file".to_string())
 }
 
-fn err_not_eof() -> ParseError {
+pub fn err_not_eof() -> ParseError {
     ParseError::Failed("not the end of file".to_string())
 }
 
-fn err_exceeds_buffers(needed: usize, have: usize) -> ParseError {
+pub fn err_exceeds_buffers(needed: usize, have: usize) -> ParseError {
     ParseError::Failed(format!(
        "parser needs more buffer space ({}) than available ({})", needed, have))
 }
 
-fn err_expected_byte(expected: u8, have: u8) -> ParseError {
+pub fn err_expected_byte(expected: u8, have: u8) -> ParseError {
     ParseError::Failed(format!(
        "expected byte: {}, have: {}", expected, have))
 }
 
-fn err_expected_one_of_bytes(expected: &[u8]) -> ParseError {
+pub fn err_expected_one_of_bytes(expected: &[u8]) -> ParseError {
     ParseError::Failed(format!(
        "expected one of the bytes: {:?}", expected))
 }
 
-fn err_expected_char(expected: char) -> ParseError {
+pub fn err_expected_one_of_chars(expected: &[char]) -> ParseError {
+    ParseError::Failed(format!(
+       "expected one of the characters: {:?}", expected))
+}
+
+pub fn err_expected_one_of_strings(expected: &[&str]) -> ParseError {
+    ParseError::Failed(format!(
+       "expected one of the strings: {:?}", expected))
+}
+
+pub fn err_expected_char(expected: char) -> ParseError {
     ParseError::Failed(format!(
        "expected char: {}", expected))
 }
 
-fn err_expected_whitespace(have: u8) -> ParseError {
+pub fn err_expected_whitespace(have: u8) -> ParseError {
     ParseError::Failed(format!(
        "expected whitespace, have: {}", have))
 }
 
-fn err_not_a_digit(have: u8) -> ParseError {
+pub fn err_not_a_digit(have: u8) -> ParseError {
     ParseError::Failed(format!(
-       "ascii digit expected, have: {}", have))
+       "expected ascii digit, have: {}", have))
 }
 
-fn err_utf8_error(have: Vec<u8>) -> ParseError {
+pub fn err_utf8_error(have: Vec<u8>) -> ParseError {
     ParseError::Failed(format!("utf8 encoding error in '{:?}'", have))
 }
 
-fn err_expected_string(expected: &str) -> ParseError {
+pub fn err_expected_string(expected: &str) -> ParseError {
     ParseError::Failed(format!(
         "expected string: {}", expected))
 }
 
-fn err_all_failed() -> ParseError {
+pub fn err_all_failed() -> ParseError {
     ParseError::Failed(format!(
        "all parsers of a choice failed"))
 }
 
-fn err_unrecoverable(e: ParseError) -> ParseError {
+pub fn err_fatal(e: ParseError) -> ParseError {
     ParseError::Fatal(Box::new(e))
 }
 
@@ -311,10 +384,7 @@ impl<'a, R: Read> Stream<'a, R> {
         );
         */
 
-        let d = self.bufs[self.cur.buf].len() - self.cur.pos;
-
-        // if self.eof && self.cur.pos + n - 1 >= self.bufs[self.cur.buf].len() &&
-        if self.eof && n > d &&
+        if self.eof && n > self.bufs[self.cur.buf].len() - self.cur.pos &&
            !self.valid[(self.cur.buf + 1) % self.opts.buf_num]
         {
             return Err(err_eof());
@@ -465,6 +535,17 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
+    pub fn one_of_chars(&mut self, cs: &[char]) -> ParseResult<()> {
+        for c in cs {
+            match self.character(*c) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.is_expected_token() => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(err_expected_one_of_chars(cs))
+    }
+
     pub fn any_byte(&mut self) -> ParseResult<u8> {
         let cur = self.consume(1, false)?;
         let ch = self.get(cur);
@@ -556,9 +637,8 @@ impl<'a, R: Read> Stream<'a, R> {
 
     // string, e.g. string("BEGIN")
     pub fn string(&mut self, pattern: &str) -> ParseResult<()> {
-        let v = pattern.bytes().collect();
-        // self.bytes(&v)
-        match self.bytes(&v) {
+        let v: Vec<u8> = pattern.bytes().collect();
+        match self.bytes(&v[..]) {
             Ok(()) => Ok(()),
             Err(ParseError::Failed(ref s)) => match s.strip_prefix("expected byte") {
                 Some(_) => return Err(err_expected_string(pattern)),
@@ -583,6 +663,34 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
+    pub fn one_of_strings(&mut self, bs: &[&str]) -> ParseResult<()> {
+        for b in bs {
+            match self.string(*b) {
+                Ok(()) => return Ok(()),
+                Err(ParseError::Failed(x)) => match x.strip_prefix("expected string:") {
+                    Some(_) => continue,
+                    None => return Err(ParseError::Failed(x)),
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(err_expected_one_of_strings(bs))
+    }
+
+    pub fn one_of_strings_ic(&mut self, bs: &[&str]) -> ParseResult<()> {
+        for b in bs {
+            match self.string_ic(*b) {
+                Ok(()) => return Ok(()),
+                Err(ParseError::Failed(x)) => match x.strip_prefix("expected string:") {
+                    Some(_) => continue,
+                    None => return Err(ParseError::Failed(x)),
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(err_expected_one_of_strings(bs))
+    }
+
     // get next n bytes as string
     pub fn get_string(&mut self, n: usize) -> ParseResult<String> {
         self.check_excess(n)?;
@@ -598,8 +706,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     // bytes, sequence of (potentially) non-unicode bytes
-    // vector or slice?
-    pub fn bytes(&mut self, pattern: &Vec<u8>) -> ParseResult<()> {
+    pub fn bytes(&mut self, pattern: &[u8]) -> ParseResult<()> {
         let n = pattern.len();
         self.check_excess(n)?;
         let mut cur = self.cur.clone();
@@ -686,7 +793,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 if self.resettable(cur) {
                     self.reset_cur(cur);
                 } else {
-                    return Err(err_unrecoverable(e));
+                    return Err(err_fatal(e));
                 }
                 return Ok(None);
             },
@@ -704,7 +811,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     break;
                 },
@@ -729,7 +836,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     break;
                 },
@@ -748,7 +855,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     },
             }
         }
@@ -779,7 +886,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     let t = parse(self)?;
                     v.push(t);
@@ -810,7 +917,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     if first {
                         break;
@@ -824,7 +931,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     break;
                 },
@@ -847,7 +954,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     return Err(e);
                 },
@@ -858,7 +965,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     break;
                 },
@@ -881,7 +988,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     break;
                 },
@@ -892,7 +999,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     return Err(e);
                 },
@@ -919,7 +1026,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     if first {
                        return Err(e);
@@ -933,7 +1040,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     if self.resettable(cur) {
                         self.reset_cur(cur);
                     } else {
-                        return Err(err_unrecoverable(e));
+                        return Err(err_fatal(e));
                     }
                     return Err(e);
                 },
@@ -1447,7 +1554,7 @@ mod tests {
         assert!(match w.digit() {
                 Ok(n) => panic!("OK without digit in stream: {}", n),
                 Err(ParseError::Failed(x)) =>
-                    match x.strip_prefix("ascii digit expected") {
+                    match x.strip_prefix("expected ascii digit") {
                         Some(_) => true,
                         _       => panic!("unexpected error: {}", x),
                     },
