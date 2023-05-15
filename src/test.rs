@@ -536,7 +536,7 @@ mod test {
         let after  = |p: &mut ByteStream| -> ParseResult<()> { p.byte('}' as u8) };
 
         assert!(match s.between(&before, &parse, &after) {
-            Ok((49, 50, 51)) => true,
+            Ok((b'1', b'2', b'3')) => true,
             Ok(n) => panic!("unexpected value: {:?}", n),
             Err(e) => panic!("unexpected error: {:?}", e),
         });

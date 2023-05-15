@@ -584,7 +584,8 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     // trait object or function?
-    pub fn optional<T>(&mut self, parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>) -> ParseResult<Option<T>> 
+    pub fn optional<T, F>(&mut self, parse: F) -> ParseResult<Option<T>> 
+         where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
         let cur = self.cur.clone();
         match parse(self) {
@@ -600,7 +601,8 @@ impl<'a, R: Read> Stream<'a, R> {
         }
     }
 
-    pub fn many<T>(&mut self, parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>) -> ParseResult<Vec<T>> 
+    pub fn many<T, F>(&mut self, parse: F) -> ParseResult<Vec<T>> 
+         where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
         let mut v = Vec::new();
         loop {
@@ -620,7 +622,8 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(v)
     }
 
-    pub fn many_one<T>(&mut self, parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>) -> ParseResult<Vec<T>> 
+    pub fn many_one<T, F>(&mut self, parse: F) -> ParseResult<Vec<T>> 
+         where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
         let mut first = true;
         let mut v = Vec::new();
@@ -645,7 +648,8 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(v)
     }
 
-    pub fn choice<T>(&mut self, parsers: Vec<&dyn Fn(&mut Stream<R>) -> ParseResult<T>>) -> ParseResult<T> 
+    pub fn choice<T, F>(&mut self, parsers: Vec<F>) -> ParseResult<T> 
+         where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
         let cur = self.cur.clone();
         for p in parsers {
@@ -662,10 +666,13 @@ impl<'a, R: Read> Stream<'a, R> {
         Err(err_all_failed())
     }
 
-    pub fn between<T>(&mut self,
-                      before: &dyn Fn(&mut Stream<R>) -> ParseResult<()>,
-                      parse:  &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
-                      after:  &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<T>
+    pub fn between<T, F1, F2, F3>(&mut self,
+                                  before: F1,
+                                  parse:  F2,
+                                  after:  F3) -> ParseResult<T>
+         where F1: Fn(&mut Stream<R>) -> ParseResult<()>,
+               F2: Fn(&mut Stream<R>) -> ParseResult<T>,
+               F3: Fn(&mut Stream<R>) -> ParseResult<()>
     {
         before(self)?;
         let r = parse(self)?;
@@ -673,9 +680,9 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(r)  
     }
 
-    pub fn until<T>(&mut self,
-                    parse:   &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
-                    stopper: &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+    pub fn until<T, F1, F2>(&mut self, parse: F1, stopper: F2) -> ParseResult<Vec<T>>
+         where F1: Fn(&mut Stream<R>) -> ParseResult<T>,
+               F2: Fn(&mut Stream<R>) -> ParseResult<()>
     {
         let mut v = Vec::new();
         loop {
@@ -698,9 +705,9 @@ impl<'a, R: Read> Stream<'a, R> {
 
     // sep_by: separated by sep, stops if sep fails, fails if parser fails
     //         but succeeds if first parser fails
-    pub fn sep_by<T>(&mut self,
-                    parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
-                    sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+    pub fn sep_by<T, F1, F2>(&mut self, parse: F1, sep: F2) -> ParseResult<Vec<T>>
+         where F1: Fn(&mut Stream<R>) -> ParseResult<T>,
+               F2: Fn(&mut Stream<R>) -> ParseResult<()>
     {
         let mut first = true;
         let mut v = Vec::new();
@@ -741,9 +748,9 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     // sep_by_one: same as sep by but must parse one
-    pub fn sep_by_one<T>(&mut self,
-                         parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
-                         sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+    pub fn sep_by_one<T, F1, F2>(&mut self, parse: F1, sep: F2) -> ParseResult<Vec<T>>
+         where F1: Fn(&mut Stream<R>) -> ParseResult<T>,
+               F2: Fn(&mut Stream<R>) -> ParseResult<()>
     {
         let mut v = Vec::new();
         loop {
@@ -775,9 +782,9 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     // end_by: separated and ended by sep, stop if parser fails, fails if sep fails
-    pub fn end_by<T>(&mut self,
-                    parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
-                    sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+    pub fn end_by<T, F1, F2>(&mut self, parse: F1, sep: F2) -> ParseResult<Vec<T>>
+         where F1: Fn(&mut Stream<R>) -> ParseResult<T>,
+               F2: Fn(&mut Stream<R>) -> ParseResult<()>
     {
         let mut v = Vec::new();
         loop {
@@ -809,9 +816,9 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     // end_by_one: same as end_by but must parse one
-    pub fn end_by_one<T>(&mut self,
-                         parse: &dyn Fn(&mut Stream<R>) -> ParseResult<T>,
-                         sep:   &dyn Fn(&mut Stream<R>) -> ParseResult<()>) -> ParseResult<Vec<T>>
+    pub fn end_by_one<T, F1, F2>(&mut self, parse: F1, sep: F2) -> ParseResult<Vec<T>>
+         where F1: Fn(&mut Stream<R>) -> ParseResult<T>,
+               F2: Fn(&mut Stream<R>) -> ParseResult<()>
     {
         let mut first = true;
         let mut v = Vec::new();
