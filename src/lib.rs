@@ -109,6 +109,9 @@ impl<'a, R: Read> Stream<'a, R> {
          self.advance_this(&mut cur, n);
          self.cur.buf = cur.buf;
          self.cur.pos = cur.pos;
+         self.cur.stream = cur.stream;
+         self.cur.line = cur.line;
+         self.cur.lpos = cur.lpos;
     }
 
     fn reset_cur(&mut self, cur: Cursor) {
@@ -184,7 +187,13 @@ impl<'a, R: Read> Stream<'a, R> {
         );
         */
 
-        if self.eof && n > self.bufs[self.cur.buf].len() - self.cur.pos &&
+        let d = if self.cur.pos <= self.bufs[self.cur.buf].len() {
+            self.bufs[self.cur.buf].len() - self.cur.pos
+        } else {
+            0
+        };
+
+        if self.eof && n > d && // self.bufs[self.cur.buf].len() - self.cur.pos &&
            !self.valid[(self.cur.buf + 1) % self.opts.buf_num]
         {
             return Err(err_eof());
@@ -211,15 +220,22 @@ impl<'a, R: Read> Stream<'a, R> {
 
         self.advance(n);
 
+        if self.cur.pos > self.bufs[self.cur.buf].len() {
+           if self.resettable(cur) {
+               self.reset_cur(cur);
+           }
+           self.eof = true;
+           return Err(err_eof());
+        }
+
         if !peek && cur.buf != self.cur.buf {
             self.valid[cur.buf] = false;
         }
          
-        return Ok(cur);
+        Ok(cur)
     }
 
     fn get(&self, cur: Cursor) -> u8 {
-        // println!("getting {}.{}", cur.buf, cur.pos);
         self.bufs[cur.buf][cur.pos]
     }
 
@@ -648,7 +664,7 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(v)
     }
 
-    pub fn choice<T, F>(&mut self, parsers: Vec<F>) -> ParseResult<T> 
+    pub fn choice<T, F>(&mut self, parsers: &[F]) -> ParseResult<T> 
          where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
         let cur = self.cur.clone();
