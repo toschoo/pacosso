@@ -90,6 +90,10 @@ impl<'a, R: Read> Stream<'a, R> {
         }
     }
 
+    pub fn position(&self) -> u64 {
+        self.cur.stream
+    }
+
     fn advance_this(&self, cur: &mut Cursor, n: usize) {
          cur.pos += n;
          cur.buf = if cur.pos >= self.opts.buf_size {
@@ -438,7 +442,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
                 Some(_) => if first {
                     first = false;
-                }
+                },
             }
         }
 
