@@ -671,6 +671,7 @@ impl<'a, R: Read> Stream<'a, R> {
     pub fn choice<T, F>(&mut self, parsers: &[F]) -> ParseResult<T> 
          where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
+        let mut v: Vec<Box<ParseError>> = Vec::new();
         let cur = self.cur.clone();
         for p in parsers {
             match p(self) {
@@ -678,12 +679,13 @@ impl<'a, R: Read> Stream<'a, R> {
                 Err(e) =>
                     if self.resettable(cur) {
                         self.reset_cur(cur);
+                        v.push(Box::new(e));
                     } else {
                         return Err(err_fatal(e));
                     },
             }
         }
-        Err(err_all_failed())
+        Err(err_all_failed(v))
     }
 
     pub fn between<T, F1, F2, F3>(&mut self,

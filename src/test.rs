@@ -628,6 +628,56 @@ mod test {
     }
 
     #[test]
+    fn test_choice() {
+        let mut input = curly_brackets_stream();
+        let mut s = to_stream(&mut input);
+        let good = |p: &mut ByteStream| -> ParseResult<()> {
+            p.byte(b'{')?;
+            p.succeed()
+        };
+        let bad1 = |p: &mut ByteStream| -> ParseResult<()> {
+            p.byte(b'(')?;
+            p.fail("read '('", ())
+        };
+        let bad2 = |p: &mut ByteStream| -> ParseResult<()> {
+            p.byte(b'[')?;
+            p.fail("read '['", ())
+        };
+        let v = [bad1, bad2, good];
+        assert!(match s.choice(&v) {
+            Ok(()) => true,
+            Err(e) => panic!("unexpected error: {:?}", e),
+        });
+    }
+
+    #[test]
+    fn test_fail_choice() {
+        let mut input = curly_brackets_stream();
+        let mut s = to_stream(&mut input);
+        let bad1 = |p: &mut ByteStream| -> ParseResult<()> {
+            p.byte(b'(')?;
+            p.fail("read '('", ())
+        };
+        let bad2 = |p: &mut ByteStream| -> ParseResult<()> {
+            p.byte(b'[')?;
+            p.fail("read '['", ())
+        };
+        let bad3 = |p: &mut ByteStream| -> ParseResult<()> {
+            p.string("BEGIN")?;
+            p.fail("read 'BEGIN'", ())
+        };
+        let v = [bad1, bad2, bad3];
+        assert!(match s.choice(&v) {
+            Ok(()) => panic!("unexpected success"),
+            Err(e) if e.is_choice_failed() => match e {
+                ParseError::Effect(_, ref v) if v.len() == 3 => true,
+                _ => false,
+            },
+            Err(e) => panic!("unexpected error: {:?}", e),
+        });
+    }
+
+    #[test]
     fn test_optional() {
         let mut input = tiny_stream();
         let mut s = to_stream(&mut input);

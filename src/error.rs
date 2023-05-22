@@ -6,6 +6,7 @@ use std::fmt;
 pub enum ParseError {
     Failed(String),
     Fatal(Box<ParseError>),
+    Effect(String, Vec<Box<ParseError>>),
     IOError(io::Error)
 }
 
@@ -14,9 +15,16 @@ impl Error for ParseError { }
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result <(), fmt::Error> {
         match self {
-            ParseError::Failed(msg) => write!(f, "parsing failed: {}", msg),
+            ParseError::Failed(e) => write!(f, "parsing failed: {}", e),
             ParseError::Fatal(e) => write!(f, "cannot recover from error '{}'", e),
             ParseError::IOError(e) => write!(f, "I/O error: {:?}", e),
+            ParseError::Effect(s, v) => {
+                write!(f, "parsing failed due to previous errors '{}': ", s)?;
+                for e in v {
+                    e.fmt(f)?;
+                }
+                Ok(())
+            },
         }
     }
 }
@@ -40,6 +48,13 @@ impl ParseError {
     pub fn is_fatal(&self) -> bool {
         match self {
             ParseError::Fatal(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_effect(&self) -> bool {
+        match self {
+            ParseError::Effect(_, _) => true,
             _ => false,
         }
     }
@@ -76,6 +91,17 @@ impl ParseError {
         match self {
             ParseError::Failed(s) =>
                 match s.strip_prefix("utf8") {
+                    Some(_) => true,
+                    _ => false,
+                },
+            _ => false,
+        }
+    }
+
+    pub fn is_choice_failed(&self) -> bool {
+        match self {
+            ParseError::Effect(s, _) =>
+                match s.strip_prefix("all parsers of a choice") {
                     Some(_) => true,
                     _ => false,
                 },
@@ -145,9 +171,8 @@ pub fn err_expected_string(expected: &str) -> ParseError {
         "expected string: {}", expected))
 }
 
-pub fn err_all_failed() -> ParseError {
-    ParseError::Failed(format!(
-       "all parsers of a choice failed"))
+pub fn err_all_failed(v: Vec<Box<ParseError>>) -> ParseError {
+    ParseError::Effect("all parsers of a choice failed".to_string(), v)
 }
 
 pub fn err_fatal(e: ParseError) -> ParseError {
