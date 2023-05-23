@@ -93,7 +93,7 @@ mod test {
         let mut input = tiny_stream();
         let mut s = to_stream(&mut input);
         assert!(match s.fail("we are failing deliberately", ()) {
-            Err(ParseError::Failed(s)) if s == "we are failing deliberately" => true,
+            Err(ParseError::Failed(s, _)) if s == "we are failing deliberately" => true,
             Err(e) => panic!("unexpected error: {:?}", e),
             Ok(_) => panic!("not failing on fail"),
         });
@@ -132,7 +132,7 @@ mod test {
         assert!(match s.byte('?' as u8) {
             Ok(()) => panic!("unexpected byte accepted"),
             Err(e) => match e {
-                           ParseError::Failed(s) =>
+                           ParseError::Failed(s, _) =>
                                match s.strip_prefix("expected byte:") {
                                  Some(_) => true,
                                  _       => panic!("unexpected error: {}", s),
@@ -163,7 +163,7 @@ mod test {
                 Ok(()) if i == 32 => panic!("1 byte too many!"),
                 Ok(()) => continue,
                 Err(e) if i == 32  => match e {
-                               ParseError::Failed(s) if s == "end of file" => true,
+                               ParseError::Failed(s, _) if s == "end of file" => true,
                                _ => panic!("unexpected error: {:?}", e),
                           },
                 Err(e) => panic!("unexpected error: {:?} at {}", e, i),
@@ -198,7 +198,7 @@ mod test {
         assert!(match s.character('ö') {
             Ok(()) => panic!("unexpected char accepted"),
             Err(e) => match e {
-                           ParseError::Failed(s) =>
+                           ParseError::Failed(s, _) =>
                                match s.strip_prefix("expected char:") {
                                  Some(_) => true,
                                  _       => panic!("unexpected error: {}", s),
@@ -229,7 +229,7 @@ mod test {
                 Ok(()) if i == 32 => panic!("1 char too many!"),
                 Ok(()) => continue,
                 Err(e) if i == 32  => match e {
-                               ParseError::Failed(s) if s == "end of file" => true,
+                               ParseError::Failed(s, _) if s == "end of file" => true,
                                _ => panic!("unexpected error: {:?}", e),
                           },
                 Err(e) => panic!("unexpected error: {:?} at {}", e, i),
@@ -254,7 +254,7 @@ mod test {
         assert!(match s.character('中') {
             Ok(()) => panic!("unexpected char accepted"),
             Err(e) => match e {
-                           ParseError::Failed(s) =>
+                           ParseError::Failed(s, _) =>
                                match s.strip_prefix("expected char:") {
                                  Some(_) => true,
                                  _       => panic!("unexpected error: {}", s),
@@ -285,7 +285,7 @@ mod test {
                 Ok(()) if i == 32 => panic!("1 byte too many!"),
                 Ok(()) => continue,
                 Err(e) if i == 32  => match e {
-                               ParseError::Failed(s) if s == "end of file" => true,
+                               ParseError::Failed(s, _) if s == "end of file" => true,
                                _ => panic!("unexpected error: {:?}", e),
                           },
                 Err(e) => panic!("unexpected error: {:?} at {}", e, i),
@@ -332,7 +332,7 @@ mod test {
         });
 
         assert!(match s.whitespace() {
-            Err(ParseError::Failed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s, _)) if s == "end of file" => true,
             Ok(()) => panic!("Ok but 'end of file' expected"),
             Err(e) => panic!("unexpected error: {:?}", e),
         });
@@ -362,7 +362,7 @@ mod test {
         }
 
         assert!(match s.any_byte() {
-            Err(ParseError::Failed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s, _)) if s == "end of file" => true,
             Ok(ch) => panic!("OK but eof expected: {}", ch),
             Err(e) => panic!("error: {:?}", e),
         });
@@ -401,13 +401,13 @@ mod test {
         }
 
         assert!(match s.peek_byte() {
-            Err(ParseError::Failed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s, _)) if s == "end of file" => true,
             Ok(ch) => panic!("OK but eof expected: {}", ch),
             Err(e) => panic!("error: {:?}", e),
         });
 
         assert!(match s.any_byte() {
-            Err(ParseError::Failed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s, _)) if s == "end of file" => true,
             Ok(ch) => panic!("OK but eof expected: {}", ch),
             Err(e) => panic!("error: {:?}", e),
         });
@@ -461,7 +461,7 @@ mod test {
 
         assert!(match s.peek_bytes(4) {
             Ok(_) => panic!("Ok, but eof expected"),
-            Err(ParseError::Failed(s)) if s == "end of file" => true,
+            Err(ParseError::Failed(s, _)) if s == "end of file" => true,
             Err(e) => panic!("unexpected error: {:?}", e),
         });
     }
@@ -477,7 +477,7 @@ mod test {
         });
         assert!(match s.peek_bytes(16) {
             Ok(_) => panic!("unexpected result"),
-            Err(ParseError::Failed(s)) => 
+            Err(ParseError::Failed(s, _)) => 
                 match s.strip_prefix("parser needs more buffer space") {
                    Some(_) => true,
                    _ => panic!("unexpected error: {}", s),
@@ -500,7 +500,7 @@ mod test {
         let mut w = to_stream(&mut input2);
         assert!(match w.digit() {
                 Ok(n) => panic!("OK without digit in stream: {}", n),
-                Err(ParseError::Failed(x)) =>
+                Err(ParseError::Failed(x, _)) =>
                     match x.strip_prefix("expected ascii digit") {
                         Some(_) => true,
                         _       => panic!("unexpected error: {}", x),
@@ -593,7 +593,7 @@ mod test {
         let parse = |p: &mut ByteStream| -> ParseResult<()> { p.byte('o' as u8) };
         assert!(match s.many_one(&parse) {
             Ok(n) => panic!("unexpected value: {:?}", n),
-            Err(ParseError::Failed(e)) =>
+            Err(ParseError::Failed(e, _)) =>
                 match e.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", e),
@@ -670,7 +670,7 @@ mod test {
         assert!(match s.choice(&v) {
             Ok(()) => panic!("unexpected success"),
             Err(e) if e.is_choice_failed() => match e {
-                ParseError::Effect(_, ref v) if v.len() == 3 => true,
+                ParseError::Effect(_, _, ref v) if v.len() == 3 => true,
                 _ => false,
             },
             Err(e) => panic!("unexpected error: {:?}", e),
@@ -789,7 +789,7 @@ mod test {
 
         assert!(match s.sep_by_one(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
-            Err(ParseError::Failed(s)) => 
+            Err(ParseError::Failed(s, _)) => 
                 match s.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", s),
@@ -821,7 +821,7 @@ mod test {
 
         assert!(match s.end_by(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
-            Err(ParseError::Failed(s)) => 
+            Err(ParseError::Failed(s, _)) => 
                 match s.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", s),
@@ -853,7 +853,7 @@ mod test {
 
         assert!(match s.end_by_one(&parse, &sep) {
             Ok(v) => panic!("unexpected value: {:?}", v),
-            Err(ParseError::Failed(s)) => 
+            Err(ParseError::Failed(s, _)) => 
                 match s.strip_prefix("expected byte:") {
                     Some(_) => true,
                     _       => panic!("unexpected error: {}", s),
@@ -914,7 +914,7 @@ mod test {
         };
         assert!(match parse(&mut s) {
             Ok(()) => panic!("lowercase accepted as uppercase"),
-            Err(ParseError::Failed(e)) => match e.strip_prefix("expected string:") {
+            Err(ParseError::Failed(e, _)) => match e.strip_prefix("expected string:") {
                 Some(_) => true,
                 _       => panic!("unexpected error: {:?}", e),
             },

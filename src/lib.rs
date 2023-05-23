@@ -1,5 +1,6 @@
 use std::io::{Read, ErrorKind};
 use std::collections::HashSet;
+use std::fmt;
 use std::str;
 
 pub mod options;
@@ -11,12 +12,19 @@ pub use self::error::*;
 pub type ParseResult<T> = Result<T, ParseError>;
 
 #[derive(Debug, Clone, Copy)]
-struct Cursor {
+pub struct Cursor {
     buf: usize,
     pos: usize,
-    stream: u64,
-    line: u64,
-    lpos: u64,
+    pub stream: u64,
+    pub line: u64,
+    pub lpos: u64,
+}
+
+impl fmt::Display for Cursor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result <(), fmt::Error> {
+        write!(f, "absolute position {}, line {}, position {}",
+               self.stream, self.line, self.lpos)
+    }
 }
 
 pub struct Stream<'a, R: Read> {
@@ -50,13 +58,13 @@ impl<'a, R: Read> Stream<'a, R> {
           opts: opts,
           inited: false,
           eof: false,
-          white_space: HashSet::from([' ' as u8, '\n' as u8, '\t' as u8]),
+          white_space: HashSet::from([b' ', b'\n', b'\r', b'\t']),
           cur: Cursor {
               buf: 0,
               pos: 0,
               stream: 0,
-              line: 0,
-              lpos: 0,
+              line: 1,
+              lpos: 1,
           }
        }
    }
@@ -90,8 +98,13 @@ impl<'a, R: Read> Stream<'a, R> {
         }
     }
 
-    pub fn position(&self) -> u64 {
-        self.cur.stream
+    pub fn position(&self) -> Cursor {
+        self.cur.clone()
+    }
+
+    pub fn count_lines(&mut self) {
+        self.cur.line += 1;
+        self.cur.lpos  = 1;
     }
 
     fn advance_this(&self, cur: &mut Cursor, n: usize) {
@@ -105,7 +118,7 @@ impl<'a, R: Read> Stream<'a, R> {
          cur.pos %= self.opts.buf_size;
 
          cur.stream += n as u64;
-         cur.lpos += 1; // line: we need to check for line breaks in n
+         cur.lpos += n as u64;
     }
 
     fn advance(&mut self, n: usize) {
@@ -200,14 +213,14 @@ impl<'a, R: Read> Stream<'a, R> {
         if self.eof && n > d && // self.bufs[self.cur.buf].len() - self.cur.pos &&
            !self.valid[(self.cur.buf + 1) % self.opts.buf_num]
         {
-            return Err(err_eof());
+            return Err(err_eof(self.cur.clone()));
         }
 
         // fill next buffer(s) if necessary
         if self.cur.pos + n >= self.bufs[self.cur.buf].len() {
             let m = self.bufs_to_fill(n);
             if m >= self.opts.buf_num {
-                return Err(err_exceeds_buffers(m, self.opts.buf_num));
+                return Err(err_exceeds_buffers(self.cur.clone(), m, self.opts.buf_num));
             }
             for i in 0 .. m {
                 let j = (self.cur.buf + i + 1)%self.opts.buf_num;
@@ -229,7 +242,7 @@ impl<'a, R: Read> Stream<'a, R> {
                self.reset_cur(cur);
            }
            self.eof = true;
-           return Err(err_eof());
+           return Err(err_eof(self.cur.clone()));
         }
 
         if !peek && cur.buf != self.cur.buf {
@@ -258,7 +271,11 @@ impl<'a, R: Read> Stream<'a, R> {
 
     fn check_excess(&self, n: usize) -> ParseResult<()> {
         if n / self.opts.buf_size >= self.opts.buf_num - 1 {
-            return Err(err_exceeds_buffers(self.opts.buf_num, self.opts.buf_num - 1)); 
+            return Err(err_exceeds_buffers(
+                       self.cur.clone(),
+                       self.opts.buf_num,
+                       self.opts.buf_num - 1)
+            );
         }
         Ok(())
     }
@@ -268,16 +285,16 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn fail<T>(&mut self, msg: &str, _dummy: T) -> ParseResult<T> {
-        Err(ParseError::Failed(msg.to_string()))
+        Err(ParseError::Failed(msg.to_string(), self.cur.clone()))
     }
 
     pub fn eof(&mut self) -> ParseResult<()> {
         match self.consume(1, false) {
             Ok(cur) => {
                 self.reset_cur(cur);
-                return Err(err_not_eof());
+                return Err(err_not_eof(self.cur.clone()));
             },
-            Err(ParseError::Failed(s)) if s == "end of file" => return Ok(()),
+            Err(ParseError::Failed(s, _)) if s == "end of file" => return Ok(()),
             Err(e) => return Err(e),
         }
     }
@@ -287,7 +304,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let b = self.get(cur);
         if b != ch {
             self.reset_cur(cur);
-            return Err(err_expected_byte(ch, b));
+            return Err(err_expected_byte(self.cur.clone(), ch, b));
         }
 
         Ok(())
@@ -297,14 +314,14 @@ impl<'a, R: Read> Stream<'a, R> {
         for b in bs {
             match self.byte(*b) {
                 Ok(()) => return Ok(()),
-                Err(ParseError::Failed(x)) => match x.strip_prefix("expected byte:") {
+                Err(ParseError::Failed(x, _)) => match x.strip_prefix("expected byte:") {
                     Some(_) => continue,
-                    None => return Err(ParseError::Failed(x)),
+                    None => return Err(ParseError::Failed(x, self.cur.clone())),
                 }
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_bytes(bs))
+        Err(err_expected_one_of_bytes(self.cur.clone(), bs))
     }
 
     pub fn character(&mut self, ch: char) -> ParseResult<()> {
@@ -320,7 +337,7 @@ impl<'a, R: Read> Stream<'a, R> {
         for i in 0..n {
             if b1[i] != b2[i] {
                 self.reset_cur(cur);
-                return Err(err_expected_char(ch));
+                return Err(err_expected_char(self.cur.clone(), ch));
             }
         }
 
@@ -333,7 +350,7 @@ impl<'a, R: Read> Stream<'a, R> {
             Ok(s) => s,
             Err(e) => {
                 self.reset_cur(cur);
-                return Err(err_expected_char(ch));
+                return Err(err_expected_char(self.cur.clone(), ch));
             },
         };
 
@@ -341,13 +358,13 @@ impl<'a, R: Read> Stream<'a, R> {
             Ok(c) => c,
             Err(e) => {
                 self.reset_cur(cur);
-                return Err(err_expected_char(ch));
+                return Err(err_expected_char(self.cur.clone(), ch));
             },
         };
 
         if ch != c2 {
             self.reset_cur(cur);
-            return Err(err_expected_char(ch));
+            return Err(err_expected_char(self.cur.clone(), ch));
         }
 
         */
@@ -363,7 +380,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_chars(cs))
+        Err(err_expected_one_of_chars(self.cur.clone(), cs))
     }
 
     pub fn any_byte(&mut self) -> ParseResult<u8> {
@@ -373,7 +390,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn any_character(&mut self) -> ParseResult<char> {
-        return Err(err_not_impl());
+        return Err(err_not_impl(self.cur.clone()));
     }
 
     pub fn digit(&mut self) -> ParseResult<u8> {
@@ -381,7 +398,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let ch = self.get(cur);
         if ch < 48 || ch > 57 {
             self.reset_cur(cur);
-            return Err(err_not_a_digit(ch));
+            return Err(err_not_a_digit(self.cur.clone(), ch));
         }
         Ok(ch) // should we return digits as numbers?
     }
@@ -395,7 +412,7 @@ impl<'a, R: Read> Stream<'a, R> {
             // we don't want to fail on eof if we read at least one digit 
             let cur = match self.consume(1, false) {
                 Ok(c) => c,
-                Err(ParseError::Failed(s)) if !first && s == "end of file" => break,
+                Err(ParseError::Failed(s, _)) if !first && s == "end of file" => break,
                 Err(e) => return Err(e),
             };
 
@@ -404,7 +421,7 @@ impl<'a, R: Read> Stream<'a, R> {
             if ch < 48 || ch > 57 {
                 self.reset_cur(cur);
                 if first {
-                    return Err(err_not_a_digit(ch));
+                    return Err(err_not_a_digit(self.cur.clone(), ch));
                 }
                 break;
             }
@@ -425,7 +442,7 @@ impl<'a, R: Read> Stream<'a, R> {
             // we don't want to fail on eof if we read at least one whitespace char
             let cur = match self.consume(1, false) {
                 Ok(c) => c,
-                Err(ParseError::Failed(s)) if !first && s == "end of file" => return Ok(()),
+                Err(ParseError::Failed(s, _)) if !first && s == "end of file" => return Ok(()),
                 Err(e) => return Err(e),
             };
 
@@ -435,7 +452,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 None => {
                     self.reset_cur(cur);
                     if first {
-                        return Err(err_expected_whitespace(ch));
+                        return Err(err_expected_whitespace(self.cur.clone(), ch));
                     }
                     break;
                 },
@@ -443,6 +460,12 @@ impl<'a, R: Read> Stream<'a, R> {
                 Some(_) => if first {
                     first = false;
                 },
+            }
+
+            // counting linebreaks in whitespace won't work with linebreaks in strings (for instance).
+            if ch == b'\n' {
+                self.cur.line += 1;
+                self.cur.lpos = 1;
             }
         }
 
@@ -460,9 +483,9 @@ impl<'a, R: Read> Stream<'a, R> {
         let v: Vec<u8> = pattern.bytes().collect();
         match self.bytes(&v[..]) {
             Ok(()) => Ok(()),
-            Err(ParseError::Failed(ref s)) => match s.strip_prefix("expected byte") {
-                Some(_) => return Err(err_expected_string(pattern)),
-                _ => return Err(ParseError::Failed(s.to_string())),
+            Err(ParseError::Failed(ref s, _)) => match s.strip_prefix("expected byte") {
+                Some(_) => return Err(err_expected_string(self.cur.clone(), pattern)),
+                _ => return Err(ParseError::Failed(s.to_string(), self.cur.clone())),
             }
             Err(e) => return Err(e),
         }
@@ -477,7 +500,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
         if s.to_uppercase() != pattern.to_uppercase() {
             self.reset_cur(cur);
-            return Err(err_expected_string(pattern));
+            return Err(err_expected_string(self.cur.clone(), pattern));
         }
  
         Ok(())
@@ -487,28 +510,28 @@ impl<'a, R: Read> Stream<'a, R> {
         for b in bs {
             match self.string(*b) {
                 Ok(()) => return Ok(()),
-                Err(ParseError::Failed(x)) => match x.strip_prefix("expected string:") {
+                Err(ParseError::Failed(x, _)) => match x.strip_prefix("expected string:") {
                     Some(_) => continue,
-                    None => return Err(ParseError::Failed(x)),
+                    None => return Err(ParseError::Failed(x, self.cur.clone())),
                 }
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_strings(bs))
+        Err(err_expected_one_of_strings(self.cur.clone(), bs))
     }
 
     pub fn one_of_strings_ic(&mut self, bs: &[&str]) -> ParseResult<()> {
         for b in bs {
             match self.string_ic(*b) {
                 Ok(()) => return Ok(()),
-                Err(ParseError::Failed(x)) => match x.strip_prefix("expected string:") {
+                Err(ParseError::Failed(x, _)) => match x.strip_prefix("expected string:") {
                     Some(_) => continue,
-                    None => return Err(ParseError::Failed(x)),
+                    None => return Err(ParseError::Failed(x, self.cur.clone())),
                 }
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_strings(bs))
+        Err(err_expected_one_of_strings(self.cur.clone(), bs))
     }
 
     // get next n bytes as string
@@ -520,7 +543,7 @@ impl<'a, R: Read> Stream<'a, R> {
             Ok(s)  => return Ok(s.to_string()),
             Err(std::str::Utf8Error{..}) => {
                 self.reset_cur(cur);
-                return Err(err_utf8_error(v));
+                return Err(err_utf8_error(self.cur.clone(), v));
             },
         }
     }
@@ -536,7 +559,7 @@ impl<'a, R: Read> Stream<'a, R> {
             let b = self.get(cur);
             if *c != b {
                self.reset_cur(sav);
-               return Err(err_expected_byte(*c, b));
+               return Err(err_expected_byte(self.cur.clone(), *c, b));
             }
             self.advance_this(&mut cur, 1);
         }
@@ -560,12 +583,12 @@ impl<'a, R: Read> Stream<'a, R> {
 
     // binary object size = buf.len()
     pub fn blob(&mut self, buf: Vec<u8>) -> ParseResult<()> {
-        return Err(err_not_impl());
+        return Err(err_not_impl(self.cur.clone()));
     }
 
     // get everything in the buffers out
     pub fn drain(&mut self) -> ParseResult<Vec<u8>> {
-        return Err(err_not_impl());
+        return Err(err_not_impl(self.cur.clone()));
     }
 
     pub fn peek_byte(&mut self) -> ParseResult<u8> {
@@ -577,7 +600,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn peek_char(&mut self) -> ParseResult<char> {
-        return Err(err_not_impl());
+        return Err(err_not_impl(self.cur.clone()));
     }
 
     pub fn peek_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
@@ -596,11 +619,11 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn peek_chars(&mut self, n: usize) -> ParseResult<Vec<char>> {
-        return Err(err_not_impl());
+        return Err(err_not_impl(self.cur.clone()));
     }
 
     pub fn peek_string(&mut self, n: usize) -> ParseResult<String> {
-        return Err(err_not_impl());
+        return Err(err_not_impl(self.cur.clone()));
     }
 
     // trait object or function?
@@ -685,7 +708,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     },
             }
         }
-        Err(err_all_failed(v))
+        Err(err_all_failed(self.cur.clone(), v))
     }
 
     pub fn between<T, F1, F2, F3>(&mut self,
