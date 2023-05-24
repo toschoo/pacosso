@@ -31,7 +31,6 @@ fn tiny_u16_stream() -> Input {
    )
 }
 
-
 fn tiny_u32_stream() -> Input {
    Input::new(repeat('京').take(32).collect::<String>()
               .as_bytes().to_vec()
@@ -76,6 +75,24 @@ fn pascal_stream() -> Input {
                .to_vec()
    )
 }
+
+fn pseudo_binary_stream() -> Input {
+    Input::new(r#"<image size="99">"#
+               .as_bytes().to_vec().into_iter()
+               .chain(repeat(b'@').take(99)).chain(
+               r#"</image>"#.as_bytes().to_vec().into_iter())
+               .collect()
+    )
+}
+
+fn pseudo_binary_stream2() -> Input {
+    Input::new("body size:99\n"
+               .as_bytes().to_vec().into_iter()
+               .chain(repeat(b'@').take(99))
+               .collect()
+    )
+}
+
 
 #[test]
 fn test_succeed() {
@@ -946,6 +963,73 @@ fn test_string_ic() {
     };
     assert!(match parse(&mut s) {
         Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_blob() {
+    let mut input = pseudo_binary_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<usize> {
+        let mut v = Vec::with_capacity(99);
+        v.resize(99, b'0');
+
+        p.byte(b'<')?;
+        p.string("image")?;
+
+        p.whitespace()?;
+
+        p.string("size")?;
+        p.byte(b'=')?;
+        p.byte(b'"')?;
+        p.string("99")?;
+        p.byte(b'"')?;
+
+        p.byte(b'>')?;
+
+        let sz = p.blob(&mut v)?;
+
+        p.byte(b'<')?;
+        p.byte(b'/')?;
+        p.string("image")?;
+        p.byte(b'>')?;
+        Ok(sz)
+    };
+    assert!(match parse(&mut s) {
+        Ok(sz) if sz == 99 => true,
+        Ok(sz) => panic!("unexpected number of bytes: {}", sz),
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_blob_eof() {
+    let mut input = pseudo_binary_stream2();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<usize> {
+        let mut v = Vec::with_capacity(99);
+        v.resize(99, b'0');
+
+        p.string("body")?;
+
+        p.whitespace()?;
+
+        p.string("size")?;
+        p.byte(b':')?;
+        p.string("99")?;
+
+        p.byte(b'\n')?;
+
+        let sz = p.blob(&mut v)?;
+
+        p.eof()?;
+
+        Ok(sz)
+    };
+    assert!(match parse(&mut s) {
+        Ok(sz) if sz == 99 => true,
+        Ok(sz) => panic!("unexpected number of bytes: {}", sz),
         Err(e) => panic!("unexpected error: {:?}", e),
     });
 }

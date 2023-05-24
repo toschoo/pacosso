@@ -150,7 +150,6 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     fn fill_buf(&mut self, n: usize) -> ParseResult<()> {
-        // println!("filling {}", n);
         loop {
             match self.reader.read(&mut self.bufs[n]) {
                 Ok(0) => {
@@ -581,9 +580,43 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(v)
     }
 
+    fn drain_bufs(&mut self, buf: &mut Vec<u8>) -> ParseResult<usize> {
+        let l = buf.len();
+        let mut s = 0;
+        let mut p = self.cur.pos;
+        let mut x = self.cur.buf;
+        for i in 0 .. l {
+            if p >= self.bufs[x].len() {
+                x += 1;
+                x %= self.opts.buf_num;
+                if !self.valid[x] {
+                    break;
+                }
+            }
+            buf[i] = self.bufs[x][p];
+            p += 1;
+            s += 1;
+        }
+        Ok(s)
+    }
+
     // binary object size = buf.len()
-    pub fn blob(&mut self, buf: Vec<u8>) -> ParseResult<()> {
-        return Err(err_not_impl(self.cur.clone()));
+    pub fn blob(&mut self, buf: &mut Vec<u8>) -> ParseResult<usize> {
+        let l = buf.len();
+        let mut s = self.drain_bufs(buf)?;
+        while s < l {
+            match self.reader.read(&mut buf[s..]) {
+                Ok(0) => break,
+                Ok(x) => s += x,
+                Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => return Err(ParseError::IOError(e)),
+            };
+        }
+
+        self.init()?;
+        self.cur.pos = 0;
+        self.cur.buf = 0;
+        Ok(s)
     }
 
     // get everything in the buffers out
@@ -593,7 +626,6 @@ impl<'a, R: Read> Stream<'a, R> {
 
     pub fn peek_byte(&mut self) -> ParseResult<u8> {
         let cur = self.consume(1, true)?;
-        // println!("peeking {}.{}", cur.buf, cur.pos);
         let ch = self.get(cur);
         self.reset_cur(cur);
         Ok(ch)
@@ -619,10 +651,6 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn peek_chars(&mut self, n: usize) -> ParseResult<Vec<char>> {
-        return Err(err_not_impl(self.cur.clone()));
-    }
-
-    pub fn peek_string(&mut self, n: usize) -> ParseResult<String> {
         return Err(err_not_impl(self.cur.clone()));
     }
 
