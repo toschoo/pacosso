@@ -327,6 +327,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut b1 = [0; 4];
         let mut b2 = [0; 4];
 
+        println!("chacacter: {}", ch);
         let n = ch.encode_utf8(&mut b1).len();
 
         let cur = self.consume(n, false)?;
@@ -388,8 +389,60 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(ch)
     }
 
+    fn len_of_char(&self, b: u8) -> usize {
+        if b & (1 << 7) == 0 {
+           return 1;
+        }
+        if b & (1 << 6) == 0 {
+           return 0;
+        }
+        if b & (1 << 5) == 0 {
+           return 2;
+        }
+        if b & (1 << 4) == 0 {
+           return 3;
+        }
+        if b & (1 << 3) == 0 {
+           return 4;
+        }
+        0
+    }
+
     pub fn any_character(&mut self) -> ParseResult<char> {
-        return Err(err_not_impl(self.cur.clone()));
+        let mut bs = [0; 4];
+
+        let cur = self.consume(1, false)?;
+        let sav = cur;
+        bs[0] = self.get(cur);
+        let n = self.len_of_char(bs[0]);
+        if n == 0 {
+            self.reset_cur(cur);
+            return Err(err_utf8_error(cur.clone(), bs.to_vec()));
+        }
+        if n == 1 {
+           return Ok(bs[0] as char);
+        }
+        for i in 0 .. (n-1) {
+            let cur = match self.consume(1, false) {
+                Ok(cur) => cur,
+                Err(_) => {
+                    self.reset_cur(sav);
+                    return Err(err_utf8_error(cur.clone(), bs.to_vec()));
+                },
+            };
+            bs[i+1] = self.get(cur);
+        }
+        match str::from_utf8(&bs) {
+            Ok(x) => {
+                return Ok(x.chars().collect::<Vec<char>>()[0]);
+            },
+            Err(_) => {
+                if self.resettable(sav) {
+                    self.reset_cur(sav);
+                }
+                return Err(err_utf8_error(cur.clone(), bs.to_vec()));
+            },
+        }
     }
 
     pub fn digit(&mut self) -> ParseResult<u8> {
@@ -580,7 +633,7 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(v)
     }
 
-    fn drain_bufs(&mut self, buf: &mut Vec<u8>) -> ParseResult<usize> {
+    fn copy_from_bufs(&mut self, buf: &mut Vec<u8>) -> ParseResult<usize> {
         let l = buf.len();
         let mut s = 0;
         let mut p = self.cur.pos;
@@ -603,7 +656,7 @@ impl<'a, R: Read> Stream<'a, R> {
     // binary object size = buf.len()
     pub fn blob(&mut self, buf: &mut Vec<u8>) -> ParseResult<usize> {
         let l = buf.len();
-        let mut s = self.drain_bufs(buf)?;
+        let mut s = self.copy_from_bufs(buf)?;
         while s < l {
             match self.reader.read(&mut buf[s..]) {
                 Ok(0) => break,
@@ -631,8 +684,18 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(ch)
     }
 
-    pub fn peek_char(&mut self) -> ParseResult<char> {
-        return Err(err_not_impl(self.cur.clone()));
+    pub fn peek_character(&mut self) -> ParseResult<char> {
+        let cur = self.cur;
+        match self.any_character() {
+            Ok(ch) => {
+                self.reset_cur(cur);
+                return Ok(ch);
+            },
+            Err(e) => {
+                self.reset_cur(cur);
+                return Err(e);
+            },    
+        }
     }
 
     pub fn peek_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
@@ -650,8 +713,24 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(v)
     }
 
-    pub fn peek_chars(&mut self, n: usize) -> ParseResult<Vec<char>> {
-        return Err(err_not_impl(self.cur.clone()));
+    pub fn peek_characters(&mut self, n: usize) -> ParseResult<Vec<char>> {
+
+        self.check_excess(4*n)?; // sloppy 
+
+        let sav = self.cur;
+
+        let mut v = Vec::new();
+        for _ in 0 .. n {
+            match self.any_character() {
+                Ok(ch) => v.push(ch),
+                Err(e) => {
+                    self.reset_cur(sav);
+                    return Err(e);
+                },
+            }
+        }
+        self.reset_cur(sav);
+        Ok(v)
     }
 
     // trait object or function?

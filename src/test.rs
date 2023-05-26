@@ -37,6 +37,18 @@ fn tiny_u32_stream() -> Input {
    )
 }
 
+fn tiny_mixed_char_stream() -> Input {
+   Input::new(once("@ß京🦀").cycle().take(2).collect::<String>()
+              .as_bytes().to_vec()
+   )
+}
+
+fn tiny_mixed_invalid_stream() -> Input {
+   Input::new(once([64, 195, 159, 228, 186, 172, 240, 159, 166, 128, 255].to_vec())
+              .flatten().cycle().take(22).collect()
+   )
+}
+
 fn tiny_ws_stream() -> Input {
    Input::new(repeat(' ' as u8).take(8).chain(
               repeat('@' as u8).take(8)).chain(
@@ -1030,6 +1042,218 @@ fn test_blob_eof() {
     assert!(match parse(&mut s) {
         Ok(sz) if sz == 99 => true,
         Ok(sz) => panic!("unexpected number of bytes: {}", sz),
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_fail_blob_eof() {
+    let mut input = curly_brackets_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<usize> {
+        let mut v = Vec::with_capacity(99);
+        v.resize(99, b'0');
+
+        p.byte(b'{')?;
+        let _ = p.digits()?;
+        p.byte(b'}')?;
+        p.blob(&mut v)
+    };
+    assert!(match parse(&mut s) {
+        Ok(0) => true,
+        Ok(sz) => panic!("unexpected success: {}", sz),
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+    assert!(match s.eof() {
+        Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_any_char() {
+    let mut input = tiny_mixed_char_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<()> {
+        for _ in 0 .. 2 {
+            let c = p.any_character()?;
+            if c != '@' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            let c = p.any_character()?;
+            if c != 'ß' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            let c = p.any_character()?;
+            if c != '京' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            let c = p.any_character()?;
+            if c != '🦀' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+        }
+        p.eof()
+    };
+    assert!(match parse(&mut s) {
+        Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_valid_and_invalid_chars() {
+    let mut input = tiny_mixed_invalid_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<()> {
+        for _ in 0 .. 2 {
+            let c = p.any_character()?;
+            if c != '@' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            let c = p.any_character()?;
+            if c != 'ß' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            let c = p.any_character()?;
+            if c != '京' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            let c = p.any_character()?;
+            if c != '🦀' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            let _ = match p.any_character() {
+                Ok(c) => return p.fail(&format!("unexpected character: '{}'", c), ()),
+                Err(e) if e.is_utf8_error() => true,
+                Err(e) => return p.fail(&format!("unexpected error: '{:?}'", e), ()),
+            };
+            p.byte(255)?;
+        }
+        p.eof()
+    };
+    assert!(match parse(&mut s) {
+        Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_peek_valid_and_invalid_chars() {
+    let mut input = tiny_mixed_invalid_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<()> {
+        for _ in 0 .. 2 {
+            let c = p.peek_character()?;
+            if c != '@' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            p.character('@')?;
+
+            let c = p.peek_character()?;
+            if c != 'ß' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            p.character('ß')?;
+
+            let c = p.peek_character()?;
+            if c != '京' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            p.character('京')?;
+            let c = p.peek_character()?;
+            if c != '🦀' {
+                return p.fail(&format!("unexpected character: '{}'", c), ());
+            }
+            p.character('🦀')?;
+
+            let _ = match p.peek_character() {
+                Ok(c) => return p.fail(&format!("unexpected character: '{}'", c), ()),
+                Err(e) if e.is_utf8_error() => true,
+                Err(e) => return p.fail(&format!("unexpected error: '{:?}'", e), ()),
+            };
+            p.byte(255)?;
+        }
+        p.eof()
+    };
+    assert!(match parse(&mut s) {
+        Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_peek_chars() {
+    let mut input = tiny_mixed_char_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<()> {
+        for _ in 0 .. 2 {
+            p.character('@')?;
+            let v = p.peek_characters(3)?;
+            if v[0] != 'ß' {
+                return p.fail(&format!("unexpected character: '{}'", v[0]), ());
+            }
+            if v[1] != '京' {
+                return p.fail(&format!("unexpected character: '{}'", v[1]), ());
+            }
+            if v[2] != '🦀' {
+                return p.fail(&format!("unexpected character: '{}'", v[2]), ());
+            }
+            p.string("ß京🦀")?;
+        }
+        p.eof()
+    };
+    assert!(match parse(&mut s) {
+        Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_peek_invalid_chars() {
+    let mut input = tiny_mixed_invalid_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<()> {
+
+        p.character('@')?;
+
+        let v = p.peek_characters(3)?;
+        if v[0] != 'ß' {
+           return p.fail(&format!("unexpected character: '{}'", v[0]), ());
+        }
+        if v[1] != '京' {
+           return p.fail(&format!("unexpected character: '{}'", v[1]), ());
+        }
+        if v[2] != '🦀' {
+           return p.fail(&format!("unexpected character: '{}'", v[2]), ());
+        }
+        p.string("ß京🦀")?;
+
+        let _ = match p.peek_characters(3) {
+            Ok(v) => return p.fail(&format!("unexpected character sequence: '{:?}'", v), ()),
+            Err(e) if e.is_utf8_error() => true,
+            Err(e) => return p.fail(&format!("unexpected error: '{:?}'", e), ()),
+        };
+
+        p.byte(255)?;
+
+        let v = p.peek_characters(3)?;
+        if v[0] != '@' {
+           return p.fail(&format!("unexpected character: '{}'", v[0]), ());
+        }
+        if v[1] != 'ß' {
+           return p.fail(&format!("unexpected character: '{}'", v[1]), ());
+        }
+        if v[2] != '京' {
+           return p.fail(&format!("unexpected character: '{}'", v[2]), ());
+        }
+        p.string("@ß京🦀")?;
+
+        p.byte(255)?;
+        p.eof()
+    };
+    assert!(match parse(&mut s) {
+        Ok(()) => true,
         Err(e) => panic!("unexpected error: {:?}", e),
     });
 }
