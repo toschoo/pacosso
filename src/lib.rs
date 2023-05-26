@@ -99,7 +99,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn position(&self) -> Cursor {
-        self.cur.clone()
+        self.cur
     }
 
     pub fn count_lines(&mut self) {
@@ -212,14 +212,14 @@ impl<'a, R: Read> Stream<'a, R> {
         if self.eof && n > d && // self.bufs[self.cur.buf].len() - self.cur.pos &&
            !self.valid[(self.cur.buf + 1) % self.opts.buf_num]
         {
-            return Err(err_eof(self.cur.clone()));
+            return Err(err_eof(self.cur));
         }
 
         // fill next buffer(s) if necessary
         if self.cur.pos + n >= self.bufs[self.cur.buf].len() {
             let m = self.bufs_to_fill(n);
             if m >= self.opts.buf_num {
-                return Err(err_exceeds_buffers(self.cur.clone(), m, self.opts.buf_num));
+                return Err(err_exceeds_buffers(self.cur, m, self.opts.buf_num));
             }
             for i in 0 .. m {
                 let j = (self.cur.buf + i + 1)%self.opts.buf_num;
@@ -232,7 +232,7 @@ impl<'a, R: Read> Stream<'a, R> {
             }
         }
 
-        let cur = self.cur.clone();
+        let cur = self.cur;
 
         self.advance(n);
 
@@ -241,7 +241,7 @@ impl<'a, R: Read> Stream<'a, R> {
                self.reset_cur(cur);
            }
            self.eof = true;
-           return Err(err_eof(self.cur.clone()));
+           return Err(err_eof(self.cur));
         }
 
         if !peek && cur.buf != self.cur.buf {
@@ -271,7 +271,7 @@ impl<'a, R: Read> Stream<'a, R> {
     fn check_excess(&self, n: usize) -> ParseResult<()> {
         if n / self.opts.buf_size >= self.opts.buf_num - 1 {
             return Err(err_exceeds_buffers(
-                       self.cur.clone(),
+                       self.cur,
                        self.opts.buf_num,
                        self.opts.buf_num - 1)
             );
@@ -284,14 +284,14 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn fail<T>(&mut self, msg: &str, _dummy: T) -> ParseResult<T> {
-        Err(ParseError::Failed(msg.to_string(), self.cur.clone()))
+        Err(ParseError::Failed(msg.to_string(), self.cur))
     }
 
     pub fn eof(&mut self) -> ParseResult<()> {
         match self.consume(1, false) {
             Ok(cur) => {
                 self.reset_cur(cur);
-                return Err(err_not_eof(self.cur.clone()));
+                return Err(err_not_eof(self.cur));
             },
             Err(ParseError::Failed(s, _)) if s == "end of file" => return Ok(()),
             Err(e) => return Err(e),
@@ -303,7 +303,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let b = self.get(cur);
         if b != ch {
             self.reset_cur(cur);
-            return Err(err_expected_byte(self.cur.clone(), ch, b));
+            return Err(err_expected_byte(self.cur, ch, b));
         }
 
         Ok(())
@@ -315,12 +315,12 @@ impl<'a, R: Read> Stream<'a, R> {
                 Ok(()) => return Ok(()),
                 Err(ParseError::Failed(x, _)) => match x.strip_prefix("expected byte:") {
                     Some(_) => continue,
-                    None => return Err(ParseError::Failed(x, self.cur.clone())),
+                    None => return Err(ParseError::Failed(x, self.cur)),
                 }
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_bytes(self.cur.clone(), bs))
+        Err(err_expected_one_of_bytes(self.cur, bs))
     }
 
     pub fn character(&mut self, ch: char) -> ParseResult<()> {
@@ -337,7 +337,7 @@ impl<'a, R: Read> Stream<'a, R> {
         for i in 0..n {
             if b1[i] != b2[i] {
                 self.reset_cur(cur);
-                return Err(err_expected_char(self.cur.clone(), ch));
+                return Err(err_expected_char(self.cur, ch));
             }
         }
 
@@ -350,7 +350,7 @@ impl<'a, R: Read> Stream<'a, R> {
             Ok(s) => s,
             Err(e) => {
                 self.reset_cur(cur);
-                return Err(err_expected_char(self.cur.clone(), ch));
+                return Err(err_expected_char(self.cur, ch));
             },
         };
 
@@ -358,13 +358,13 @@ impl<'a, R: Read> Stream<'a, R> {
             Ok(c) => c,
             Err(e) => {
                 self.reset_cur(cur);
-                return Err(err_expected_char(self.cur.clone(), ch));
+                return Err(err_expected_char(self.cur, ch));
             },
         };
 
         if ch != c2 {
             self.reset_cur(cur);
-            return Err(err_expected_char(self.cur.clone(), ch));
+            return Err(err_expected_char(self.cur, ch));
         }
 
         */
@@ -380,7 +380,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_chars(self.cur.clone(), cs))
+        Err(err_expected_one_of_chars(self.cur, cs))
     }
 
     pub fn any_byte(&mut self) -> ParseResult<u8> {
@@ -417,7 +417,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let n = self.len_of_char(bs[0]);
         if n == 0 {
             self.reset_cur(cur);
-            return Err(err_utf8_error(cur.clone(), bs.to_vec()));
+            return Err(err_utf8_error(cur, bs.to_vec()));
         }
         if n == 1 {
            return Ok(bs[0] as char);
@@ -427,7 +427,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 Ok(cur) => cur,
                 Err(_) => {
                     self.reset_cur(sav);
-                    return Err(err_utf8_error(cur.clone(), bs.to_vec()));
+                    return Err(err_utf8_error(cur, bs.to_vec()));
                 },
             };
             bs[i+1] = self.get(cur);
@@ -440,7 +440,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 if self.resettable(sav) {
                     self.reset_cur(sav);
                 }
-                return Err(err_utf8_error(cur.clone(), bs.to_vec()));
+                return Err(err_utf8_error(cur, bs.to_vec()));
             },
         }
     }
@@ -450,7 +450,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let ch = self.get(cur);
         if ch < 48 || ch > 57 {
             self.reset_cur(cur);
-            return Err(err_not_a_digit(self.cur.clone(), ch));
+            return Err(err_not_a_digit(self.cur, ch));
         }
         Ok(ch) // should we return digits as numbers?
     }
@@ -473,7 +473,7 @@ impl<'a, R: Read> Stream<'a, R> {
             if ch < 48 || ch > 57 {
                 self.reset_cur(cur);
                 if first {
-                    return Err(err_not_a_digit(self.cur.clone(), ch));
+                    return Err(err_not_a_digit(self.cur, ch));
                 }
                 break;
             }
@@ -504,7 +504,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 None => {
                     self.reset_cur(cur);
                     if first {
-                        return Err(err_expected_whitespace(self.cur.clone(), ch));
+                        return Err(err_expected_whitespace(self.cur, ch));
                     }
                     break;
                 },
@@ -536,8 +536,8 @@ impl<'a, R: Read> Stream<'a, R> {
         match self.bytes(&v[..]) {
             Ok(()) => Ok(()),
             Err(ParseError::Failed(ref s, _)) => match s.strip_prefix("expected byte") {
-                Some(_) => return Err(err_expected_string(self.cur.clone(), pattern)),
-                _ => return Err(ParseError::Failed(s.to_string(), self.cur.clone())),
+                Some(_) => return Err(err_expected_string(self.cur, pattern)),
+                _ => return Err(ParseError::Failed(s.to_string(), self.cur)),
             }
             Err(e) => return Err(e),
         }
@@ -547,12 +547,12 @@ impl<'a, R: Read> Stream<'a, R> {
     pub fn string_ic(&mut self, pattern: &str) -> ParseResult<()> {
         let n = pattern.len();
         self.check_excess(n)?;
-        let cur = self.cur.clone();
+        let cur = self.cur;
         let s = self.get_string(n)?;
 
         if s.to_uppercase() != pattern.to_uppercase() {
             self.reset_cur(cur);
-            return Err(err_expected_string(self.cur.clone(), pattern));
+            return Err(err_expected_string(self.cur, pattern));
         }
  
         Ok(())
@@ -564,12 +564,12 @@ impl<'a, R: Read> Stream<'a, R> {
                 Ok(()) => return Ok(()),
                 Err(ParseError::Failed(x, _)) => match x.strip_prefix("expected string:") {
                     Some(_) => continue,
-                    None => return Err(ParseError::Failed(x, self.cur.clone())),
+                    None => return Err(ParseError::Failed(x, self.cur)),
                 }
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_strings(self.cur.clone(), bs))
+        Err(err_expected_one_of_strings(self.cur, bs))
     }
 
     pub fn one_of_strings_ic(&mut self, bs: &[&str]) -> ParseResult<()> {
@@ -578,24 +578,24 @@ impl<'a, R: Read> Stream<'a, R> {
                 Ok(()) => return Ok(()),
                 Err(ParseError::Failed(x, _)) => match x.strip_prefix("expected string:") {
                     Some(_) => continue,
-                    None => return Err(ParseError::Failed(x, self.cur.clone())),
+                    None => return Err(ParseError::Failed(x, self.cur)),
                 }
                 Err(e) => return Err(e),
             }
         }
-        Err(err_expected_one_of_strings(self.cur.clone(), bs))
+        Err(err_expected_one_of_strings(self.cur, bs))
     }
 
     // get next n bytes as string
     pub fn get_string(&mut self, n: usize) -> ParseResult<String> {
         self.check_excess(n)?;
-        let cur = self.cur.clone();
+        let cur = self.cur;
         let v = self.get_bytes(n)?;
         match str::from_utf8(&v) {
             Ok(s)  => return Ok(s.to_string()),
             Err(std::str::Utf8Error{..}) => {
                 self.reset_cur(cur);
-                return Err(err_utf8_error(self.cur.clone(), v));
+                return Err(err_utf8_error(self.cur, v));
             },
         }
     }
@@ -604,14 +604,14 @@ impl<'a, R: Read> Stream<'a, R> {
     pub fn bytes(&mut self, pattern: &[u8]) -> ParseResult<()> {
         let n = pattern.len();
         self.check_excess(n)?;
-        let mut cur = self.cur.clone();
-        let sav = cur.clone();
+        let mut cur = self.cur;
+        let sav = cur;
         self.consume(n, false)?;
         for c in pattern {
             let b = self.get(cur);
             if *c != b {
                self.reset_cur(sav);
-               return Err(err_expected_byte(self.cur.clone(), *c, b));
+               return Err(err_expected_byte(self.cur, *c, b));
             }
             self.advance_this(&mut cur, 1);
         }
@@ -622,7 +622,7 @@ impl<'a, R: Read> Stream<'a, R> {
     pub fn get_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
 
         self.check_excess(n)?;
-        let mut cur = self.cur.clone();
+        let mut cur = self.cur;
         self.consume(n, false)?;
 
         let mut v = Vec::with_capacity(n);
@@ -674,7 +674,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
     // get everything in the buffers out
     pub fn drain(&mut self) -> ParseResult<Vec<u8>> {
-        return Err(err_not_impl(self.cur.clone()));
+        return Err(err_not_impl(self.cur));
     }
 
     pub fn peek_byte(&mut self) -> ParseResult<u8> {
@@ -703,7 +703,7 @@ impl<'a, R: Read> Stream<'a, R> {
         self.check_excess(n)?;
 
         let mut cur = self.consume(n, true)?;
-        let sav = cur.clone();
+        let sav = cur;
         let mut v = Vec::with_capacity(n);
         for _ in 0 .. n {
             v.push(self.get(cur));
@@ -737,7 +737,7 @@ impl<'a, R: Read> Stream<'a, R> {
     pub fn optional<T, F>(&mut self, parse: F) -> ParseResult<Option<T>> 
          where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
-        let cur = self.cur.clone();
+        let cur = self.cur;
         match parse(self) {
             Ok(t) => return Ok(Some(t)),
             Err(e) => {
@@ -756,7 +756,7 @@ impl<'a, R: Read> Stream<'a, R> {
     {
         let mut v = Vec::new();
         loop {
-            let cur = self.cur.clone();
+            let cur = self.cur;
             match parse(self) {
                 Ok(t) => v.push(t),
                 Err(e) => {
@@ -778,7 +778,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut first = true;
         let mut v = Vec::new();
         loop {
-            let cur = self.cur.clone();
+            let cur = self.cur;
             match parse(self) {
                 Ok(t) => {
                     v.push(t);
@@ -802,7 +802,7 @@ impl<'a, R: Read> Stream<'a, R> {
          where F: Fn(&mut Stream<R>) -> ParseResult<T>
     {
         let mut v: Vec<Box<ParseError>> = Vec::new();
-        let cur = self.cur.clone();
+        let cur = self.cur;
         for p in parsers {
             match p(self) {
                 Ok(t) => return Ok(t),
@@ -815,7 +815,7 @@ impl<'a, R: Read> Stream<'a, R> {
                     },
             }
         }
-        Err(err_all_failed(self.cur.clone(), v))
+        Err(err_all_failed(self.cur, v))
     }
 
     pub fn between<T, F1, F2, F3>(&mut self,
@@ -838,7 +838,7 @@ impl<'a, R: Read> Stream<'a, R> {
     {
         let mut v = Vec::new();
         loop {
-            let cur = self.cur.clone();
+            let cur = self.cur;
             match stopper(self) {
                Ok(()) => break,
                Err(e) => {
@@ -864,7 +864,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut first = true;
         let mut v = Vec::new();
         loop {
-            let cur = self.cur.clone();
+            let cur = self.cur;
             match parse(self) {
                 Ok(t) => {
                     if first {
@@ -906,7 +906,7 @@ impl<'a, R: Read> Stream<'a, R> {
     {
         let mut v = Vec::new();
         loop {
-            let cur = self.cur.clone();
+            let cur = self.cur;
             match parse(self) {
                 Ok(t) => v.push(t),
                 Err(e) => {
@@ -940,7 +940,7 @@ impl<'a, R: Read> Stream<'a, R> {
     {
         let mut v = Vec::new();
         loop {
-            let cur = self.cur.clone();
+            let cur = self.cur;
             match parse(self) {
                 Ok(t) => v.push(t),
                 Err(e) => {
@@ -975,7 +975,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut first = true;
         let mut v = Vec::new();
         loop {
-            let cur = self.cur.clone();
+            let cur = self.cur;
             match parse(self) {
                 Ok(t) => {
                      first = false;
