@@ -150,15 +150,20 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     fn fill_buf(&mut self, n: usize) -> ParseResult<()> {
+        let mut buf = &mut self.bufs[n][..];
+        let mut s = 0;
         loop {
-            match self.reader.read(&mut self.bufs[n]) {
+            match self.reader.read(&mut buf[s..]) {
                 Ok(0) => {
-                    self.eof = true;
-                    self.bufs[n].resize(0, 0);
+                    if s < self.opts.buf_size {
+                       self.eof = true;
+                       self.bufs[n].resize(s, 0);
+                    }
                 },
                 Ok(x) => {
-                    if x < self.opts.buf_size {
-                        self.bufs[n].resize(x, 0);
+                    s += x;
+                    if s < self.opts.buf_size {
+                        continue;
                     }
                 },
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -236,6 +241,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
         self.advance(n);
 
+        // should be >=
         if self.cur.pos > self.bufs[self.cur.buf].len() {
            if self.resettable(cur) {
                self.reset_cur(cur);
@@ -645,6 +651,7 @@ impl<'a, R: Read> Stream<'a, R> {
                 if !self.valid[x] {
                     break;
                 }
+                p = 0;
             }
             buf[i] = self.bufs[x][p];
             p += 1;
@@ -674,7 +681,24 @@ impl<'a, R: Read> Stream<'a, R> {
 
     // get everything in the buffers out
     pub fn drain(&mut self) -> ParseResult<Vec<u8>> {
-        return Err(err_not_impl(self.cur));
+        let mut v = Vec::new();
+        let mut p = self.cur.pos;
+        let mut x = self.cur.buf;
+        loop {
+            if p < self.bufs[x].len() {
+                v.extend_from_slice(&self.bufs[x][p..]);
+            }
+            x += 1;
+            x %= self.opts.buf_num;
+            if !self.valid[x] {
+               break;
+            }
+            p = 0;
+        }
+
+        // self.cur.pos = 0;
+        // self.cur.buf = 0;
+        Ok(v)
     }
 
     pub fn peek_byte(&mut self) -> ParseResult<u8> {

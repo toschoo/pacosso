@@ -5,6 +5,7 @@ use std::iter::{once, repeat};
 
 type Input = io::Cursor<Vec<u8>>;
 type ByteStream<'a> = Stream<'a, Input>;
+type ChainedStream<'a> = Stream<'a, io::Chain<Input, Input>>;
 
 fn to_stream(input: &mut Input) -> ByteStream {
    Stream::new(Opts::default()
@@ -1068,6 +1069,82 @@ fn test_fail_blob_eof() {
         Ok(()) => true,
         Err(e) => panic!("unexpected error: {:?}", e),
     });
+}
+
+#[test]
+fn test_drain() {
+    // IF something THEN BEGIN do_something(); END IF
+    let mut input = pascal_stream();
+    let mut s = to_stream(&mut input);
+    let parse = |p: &mut ByteStream| -> ParseResult<()> {
+        p.string("IF")?;
+        p.whitespace()?;
+        p.string("something")?;
+
+        let v = p.drain()?;
+        match str::from_utf8(&v) {
+            Ok(" THE") => return Ok(()),
+            Ok(x) => return p.fail(&format!("unexpected value: {}", x), ()),
+            Err(e) => return p.fail(&format!("unexpected error: {:?}", e), ()),
+        }
+    };
+    assert!(match parse(&mut s) {
+        Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    });
+}
+
+#[test]
+fn test_drain_and_continue() {
+    // IF something THEN BEGIN do_something(); END IF
+    let mut input = pascal_stream();
+    let mut s = to_stream(&mut input);
+    let parse1 = |p: &mut ByteStream| -> ParseResult<Vec<u8>> {
+        p.string("IF")?;
+        p.whitespace()?;
+
+        let v = p.drain()?;
+        match str::from_utf8(&v) {
+            Ok("somet") => return Ok(v),
+            Ok(x) => return p.fail(&format!("unexpected value: '{}'", x), v),
+            Err(e) => return p.fail(&format!("unexpected error: {:?}", e), v),
+        }
+    };
+    let parse2 = |p: &mut ChainedStream| -> ParseResult<()> {
+        p.string("something")?;
+        p.whitespace()?;
+        p.string("THEN")?;
+        p.whitespace()?;
+        p.string("BEGIN")?;
+        p.whitespace()?;
+        p.string("do_something")?;
+        p.skip_whitespace()?;
+        p.character('(')?;
+        p.character(')')?;
+        p.character(';')?;
+        p.skip_whitespace()?;
+        println!("end");
+        p.string("END")?;
+        p.skip_whitespace()?;
+        println!("if");
+        p.string("IF")?;
+        p.eof()
+    };
+    let v = match parse1(&mut s) {
+        Ok(v) => v,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    };
+
+    let mut chain = io::Cursor::new(v).chain(input);
+    let mut s = Stream::new(Opts::default()
+                    .set_buf_size(8)
+                    .set_buf_num(3),
+                    &mut chain,
+    );
+    let v = match parse2(&mut s) {
+        Ok(()) => true,
+        Err(e) => panic!("unexpected error: {:?}", e),
+    };
 }
 
 #[test]
