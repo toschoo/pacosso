@@ -1,4 +1,6 @@
-use std::io::{Read, ErrorKind};
+use std::io::{self, Read, ErrorKind};
+use std::ffi::OsString;
+use std::fs::File;
 use std::collections::HashSet;
 use std::fmt;
 use std::str;
@@ -10,6 +12,7 @@ pub mod error;
 pub use self::error::*;
 
 pub type ParseResult<T> = Result<T, ParseError>;
+pub type ParseChain<'a, R> = ParseResult<io::Chain<io::Cursor<Vec<u8>>, &'a mut R>>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Cursor {
@@ -39,6 +42,26 @@ pub struct Stream<'a, R: Read> {
 }
 
 type Buf = Vec<u8>;
+
+pub fn parse_file<F, T>(f: OsString, opts: Opts, parse: F) -> ParseResult<T> 
+         where F: Fn(&mut Stream<File>) -> ParseResult<T>
+{
+    match File::open(f) {
+        Ok(mut input) => {
+            let mut s = Stream::new(opts, &mut input);
+            return parse(&mut s);
+        },
+        Err(e) => return Err(ParseError::IOError(e)),
+    }
+}
+
+pub fn parse_string<F, T>(s: String, opts: Opts, parse: F) -> ParseResult<T> 
+         where F: Fn(&mut Stream<io::Cursor<Vec<u8>>>) -> ParseResult<T>
+{
+    let mut input = io::Cursor::new(s.as_bytes().to_vec());
+    let mut p = Stream::new(opts, &mut input);
+    parse(&mut p)
+}
 
 impl<'a, R: Read> Stream<'a, R> {
    pub fn new(opts: Opts, reader: &'a mut R) -> Stream<R> {
@@ -150,7 +173,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     fn fill_buf(&mut self, n: usize) -> ParseResult<()> {
-        let mut buf = &mut self.bufs[n][..];
+        let buf = &mut self.bufs[n][..];
         let mut s = 0;
         loop {
             match self.reader.read(&mut buf[s..]) {
@@ -696,8 +719,8 @@ impl<'a, R: Read> Stream<'a, R> {
             p = 0;
         }
 
-        // self.cur.pos = 0;
-        // self.cur.buf = 0;
+        self.cur.pos = 0;
+        self.cur.buf = 0;
         Ok(v)
     }
 

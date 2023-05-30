@@ -74,6 +74,24 @@ fn curly_brackets_stream() -> Input {
    )
 }
 
+fn json_stream() -> Input {
+    let s = r#"{
+                "id" = 1,
+                "a" = "hello"
+                } 
+                "#.to_string();
+    let l = s.len() * 3;
+    Input::new(s
+               .as_bytes().iter()
+               .map(|c: &u8| -> u8 {
+                        *c
+                })
+               .cycle()
+               .take(l)
+               .collect::<Vec<u8>>()
+   )
+}
+
 fn tiny_end_stream() -> Input {
    Input::new(once('@' as u8).chain(
               once(',' as u8)).cycle().take(32)
@@ -1073,7 +1091,6 @@ fn test_fail_blob_eof() {
 
 #[test]
 fn test_drain() {
-    // IF something THEN BEGIN do_something(); END IF
     let mut input = pascal_stream();
     let mut s = to_stream(&mut input);
     let parse = |p: &mut ByteStream| -> ParseResult<()> {
@@ -1141,10 +1158,71 @@ fn test_drain_and_continue() {
                     .set_buf_num(3),
                     &mut chain,
     );
-    let v = match parse2(&mut s) {
+    assert!(match parse2(&mut s) {
         Ok(()) => true,
         Err(e) => panic!("unexpected error: {:?}", e),
+    })
+}
+
+#[test]
+fn test_parse_and_continue() {
+    let mut input = json_stream();
+    let mut s = to_stream(&mut input);
+
+    let parse1 = |p: &mut  ByteStream| -> ParseResult<()> {
+        p.whitespace()
     };
+
+    let parse2 = |p: &mut ByteStream| -> ParseResult<(String, String)> {
+        p.byte(b'{')?;
+        p.skip_whitespace()?;
+
+        p.byte(b'"')?;
+        p.string("id")?;
+        p.byte(b'"')?;
+        p.skip_whitespace()?;
+        p.byte(b'=')?;
+        p.skip_whitespace()?;
+        let x = p.get_string(1)?;
+        p.skip_whitespace()?;
+
+        p.byte(b',')?;
+
+        p.skip_whitespace()?;
+        p.byte(b'"')?;
+        p.string("a")?;
+        p.byte(b'"')?;
+
+        p.skip_whitespace()?;
+        p.byte(b'=')?;
+        p.skip_whitespace()?;
+
+        p.byte(b'"')?;
+        let a = p.get_string(5)?;
+        p.byte(b'"')?;
+
+        p.skip_whitespace()?;
+        p.byte(b'}')?;
+
+        Ok((x, a))
+    };
+
+    for i in 0 .. 3 {
+        let r = match parse2(&mut s) {
+            Ok(t) => t,
+            Err(e) => panic!("unexpected error: {:?} in {}", e, i),
+        };
+
+        assert!(match r {
+            (a, b) if a == "1" && b == "hello" => true,
+            (a, b) => panic!("unexpected result: {} / {}", a, b),
+        });
+
+        assert!(match parse1(&mut s) {
+            Ok(()) => true,
+            Err(e) => panic!("unexpected error: {:?}", e),
+        });
+    }
 }
 
 #[test]
