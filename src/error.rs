@@ -5,6 +5,7 @@ use super::Cursor;
 
 #[derive(Debug)]
 pub enum ParseError {
+    Option(String),
     Failed(String, Cursor),
     Fatal(Box<ParseError>),
     Effect(String, Cursor, Vec<Box<ParseError>>),
@@ -16,6 +17,7 @@ impl Error for ParseError { }
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result <(), fmt::Error> {
         match self {
+            ParseError::Option(e) => write!(f, "invalid option: {}", e),
             ParseError::Failed(e, c) => write!(f, "parsing failed: {} at {}", e, c),
             ParseError::Fatal(e) => write!(f, "cannot recover from error '{}'", e),
             ParseError::IOError(e) => write!(f, "I/O error: {:?}", e),
@@ -56,6 +58,13 @@ impl ParseError {
     pub fn is_effect(&self) -> bool {
         match self {
             ParseError::Effect(_, _, _) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_option(&self) -> bool {
+        match self {
+            ParseError::Option(_) => true,
             _ => false,
         }
     }

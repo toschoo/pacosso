@@ -1,3 +1,5 @@
+use crate::*;
+
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Opts {
     pub buf_size: usize,
@@ -60,6 +62,15 @@ impl Opts {
             max_stream: self.max_stream,
             is_stream: true,
         }
+    }
+    pub fn validate(&self) -> ParseResult<()> {
+        if self.buf_size < 8 {
+            return Err(ParseError::Option("minimum buf size is 8 bytes".to_string()));
+        }
+        if self.buf_size < 3 {
+            return Err(ParseError::Option("minimum number of bufs 2".to_string()));
+        }
+        Ok(())
     }
 }
 

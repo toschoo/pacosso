@@ -100,18 +100,24 @@ impl<'a, R: Read> Stream<'a, R> {
    }
 
    fn init(&mut self) -> ParseResult<()> {
+       self.opts.validate()?;
+
        for i in 1..self.opts.buf_num {
            self.states[i].valid = false;
            self.states[i].size  = self.opts.buf_size;
        }
+
        self.cur.line = 0;
        self.cur.lpos = 0;
        self.cur.buf = 0;
        self.cur.pos = 0;
+
        self.fill_buf(0, 0)?;
+
        if self.states[0].size > 0 {
            self.states[0].valid = true;
        }
+
        self.inited = true;
        Ok(())
     }
@@ -237,7 +243,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     // advance stream position and return old settings for cur
-    fn consume(&mut self, n: usize, peek: bool) -> ParseResult<Cursor> {
+    fn consume(&mut self, n: usize) -> ParseResult<Cursor> {
         // check stream position
 
         // initialise
@@ -363,7 +369,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn eof(&mut self) -> ParseResult<()> {
-        match self.consume(1, false) {
+        match self.consume(1) {
             Ok(cur) => {
                 self.reset_cur(cur);
                 return Err(err_not_eof(self.cur));
@@ -374,7 +380,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn byte(&mut self, ch: u8) -> ParseResult<()> {
-        let cur = self.consume(1, false)?;
+        let cur = self.consume(1)?;
         let b = self.get(cur);
         if b != ch {
             self.reset_cur(cur);
@@ -404,7 +410,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
         let n = ch.encode_utf8(&mut b1).len();
 
-        let cur = self.consume(n, false)?;
+        let cur = self.consume(n)?;
 
         self.get_many(cur, n, &mut b2);
 
@@ -458,7 +464,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn any_byte(&mut self) -> ParseResult<u8> {
-        let cur = self.consume(1, false)?;
+        let cur = self.consume(1)?;
         let ch = self.get(cur);
         Ok(ch)
     }
@@ -485,7 +491,7 @@ impl<'a, R: Read> Stream<'a, R> {
     pub fn any_character(&mut self) -> ParseResult<char> {
         let mut bs = [0; 4];
 
-        let cur = self.consume(1, false)?;
+        let cur = self.consume(1)?;
         let sav = cur;
         bs[0] = self.get(cur);
         let n = self.len_of_char(bs[0]);
@@ -497,7 +503,7 @@ impl<'a, R: Read> Stream<'a, R> {
            return Ok(bs[0] as char);
         }
         for i in 0 .. (n-1) {
-            let cur = match self.consume(1, false) {
+            let cur = match self.consume(1) {
                 Ok(cur) => cur,
                 Err(_) => {
                     self.reset_cur(sav);
@@ -520,7 +526,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn digit(&mut self) -> ParseResult<u8> {
-        let cur = self.consume(1, false)?;
+        let cur = self.consume(1)?;
         let ch = self.get(cur);
         if ch < 48 || ch > 57 {
             self.reset_cur(cur);
@@ -536,7 +542,7 @@ impl<'a, R: Read> Stream<'a, R> {
         loop {
 
             // we don't want to fail on eof if we read at least one digit 
-            let cur = match self.consume(1, false) {
+            let cur = match self.consume(1) {
                 Ok(c) => c,
                 Err(ParseError::Failed(s, _)) if !first && s == "end of file" => break,
                 Err(e) => return Err(e),
@@ -566,7 +572,7 @@ impl<'a, R: Read> Stream<'a, R> {
         loop {
 
             // we don't want to fail on eof if we read at least one whitespace char
-            let cur = match self.consume(1, false) {
+            let cur = match self.consume(1) {
                 Ok(c) => c,
                 Err(ParseError::Failed(s, _)) if !first && s == "end of file" => return Ok(()),
                 Err(e) => return Err(e),
@@ -682,7 +688,7 @@ impl<'a, R: Read> Stream<'a, R> {
         self.check_excess(n)?;
         let mut cur = self.cur;
         let sav = cur;
-        self.consume(n, false)?;
+        self.consume(n)?;
         for c in pattern {
             let b = self.get(cur);
             if *c != b {
@@ -699,7 +705,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
         self.check_excess(n)?;
         let mut cur = self.cur;
-        self.consume(n, false)?;
+        self.consume(n)?;
 
         let mut v = Vec::with_capacity(n);
         for _ in 0..n {
@@ -773,7 +779,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     pub fn peek_byte(&mut self) -> ParseResult<u8> {
-        let cur = self.consume(1, true)?;
+        let cur = self.consume(1)?;
         let ch = self.get(cur);
         self.reset_cur(cur);
         Ok(ch)
@@ -797,7 +803,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
         self.check_excess(n)?;
 
-        let mut cur = self.consume(n, true)?;
+        let mut cur = self.consume(n)?;
         let sav = cur;
         let mut v = Vec::with_capacity(n);
         for _ in 0 .. n {
