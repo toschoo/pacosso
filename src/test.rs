@@ -1091,6 +1091,7 @@ fn test_fail_blob_eof() {
 
 #[test]
 fn test_drain() {
+    // IF something THEN BEGIN do_something(); END IF
     let mut input = pascal_stream();
     let mut s = to_stream(&mut input);
     let parse = |p: &mut ByteStream| -> ParseResult<()> {
@@ -1100,7 +1101,7 @@ fn test_drain() {
 
         let v = p.drain()?;
         match str::from_utf8(&v) {
-            Ok(" THE") => return Ok(()),
+            Ok(" THEN BEGIN ") => return Ok(()),
             Ok(x) => return p.fail(&format!("unexpected value: {}", x), ()),
             Err(e) => return p.fail(&format!("unexpected error: {:?}", e), ()),
         }
@@ -1140,10 +1141,8 @@ fn test_drain_and_continue() {
         p.character(')')?;
         p.character(';')?;
         p.skip_whitespace()?;
-        println!("end");
         p.string("END")?;
         p.skip_whitespace()?;
-        println!("if");
         p.string("IF")?;
         p.eof()
     };
@@ -1152,6 +1151,7 @@ fn test_drain_and_continue() {
         Err(e) => panic!("unexpected error: {:?}", e),
     };
 
+    println!("continuing with next stream");
     let mut chain = io::Cursor::new(v).chain(input);
     let mut s = Stream::new(Opts::default()
                     .set_buf_size(8)

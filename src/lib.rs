@@ -23,6 +23,12 @@ pub struct Cursor {
     pub lpos: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BufState {
+    valid: bool,
+    size: usize,
+}
+
 impl fmt::Display for Cursor {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result <(), fmt::Error> {
         write!(f, "absolute position {}, line {}, position {}",
@@ -32,12 +38,11 @@ impl fmt::Display for Cursor {
 
 pub struct Stream<'a, R: Read> {
     reader: &'a mut R,
-    bufs: Vec<Buf>,
-    valid: Vec<bool>,
+    bufs: Vec<Buf>, 
+    states: Vec<BufState>,
     cur: Cursor,
     opts: Opts,
     inited: bool,
-    eof: bool,
     white_space: HashSet<u8>,
 }
 
@@ -69,18 +74,20 @@ impl<'a, R: Read> Stream<'a, R> {
        for _ in 0..opts.buf_num {
            buf.push(vec!(0; opts.buf_size));
        }
-       let mut valid = Vec::with_capacity(opts.buf_num);
+       let mut states = Vec::with_capacity(opts.buf_num);
        for _ in 0 .. opts.buf_num {
-           valid.push(false);
+           states.push(BufState {
+               valid: false,
+               size: opts.buf_size,
+           });
        }
 
        Stream {
           reader: reader,
           bufs: buf,
-          valid: valid,
+          states: states,
           opts: opts,
           inited: false,
-          eof: false,
           white_space: HashSet::from([b' ', b'\n', b'\r', b'\t']),
           cur: Cursor {
               buf: 0,
@@ -94,11 +101,18 @@ impl<'a, R: Read> Stream<'a, R> {
 
    fn init(&mut self) -> ParseResult<()> {
        for i in 1..self.opts.buf_num {
-           self.valid[i] = false;
+           self.states[i].valid = false;
+           self.states[i].size  = self.opts.buf_size;
        }
-       self.fill_buf(0)?;
+       self.cur.line = 0;
+       self.cur.lpos = 0;
+       self.cur.buf = 0;
+       self.cur.pos = 0;
+       self.fill_buf(0, 0)?;
+       if self.states[0].size > 0 {
+           self.states[0].valid = true;
+       }
        self.inited = true;
-       self.valid[0] = true;
        Ok(())
     }
 
@@ -160,6 +174,7 @@ impl<'a, R: Read> Stream<'a, R> {
         self.cur.stream = cur.stream;
         self.cur.line = cur.line;
         self.cur.lpos = cur.lpos;
+        self.states[cur.buf].valid = true;
     }
 
     fn resettable(&self, cur: Cursor) -> bool {
@@ -172,21 +187,27 @@ impl<'a, R: Read> Stream<'a, R> {
         d < (self.opts.buf_num - 1)
     }
 
-    fn fill_buf(&mut self, n: usize) -> ParseResult<()> {
+    fn fill_buf(&mut self, n: usize, wanted: usize) -> ParseResult<()> {
+        let mut s = if self.states[n].size < self.opts.buf_size {
+            self.states[n].size
+        } else {
+            0
+        };
         let buf = &mut self.bufs[n][..];
-        let mut s = 0;
         loop {
             match self.reader.read(&mut buf[s..]) {
                 Ok(0) => {
-                    if s < self.opts.buf_size {
-                       self.eof = true;
-                       self.bufs[n].resize(s, 0);
-                    }
+                    self.states[n].size = s;
                 },
                 Ok(x) => {
                     s += x;
+                    self.states[n].size = s; // redundant
                     if s < self.opts.buf_size {
-                        continue;
+                       if !self.opts.is_stream {
+                           continue;
+                       } else if s < wanted {
+                           continue;
+                       }
                     }
                 },
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
@@ -195,21 +216,6 @@ impl<'a, R: Read> Stream<'a, R> {
             break;
         }
         Ok(())
-    }
-
-    fn bufs_to_fill(&self, n: usize) -> usize {
-        if n > self.opts.buf_size {
-            let t = n - (self.opts.buf_size - self.cur.pos);
-            if t > self.opts.buf_size {
-                let m = t / self.opts.buf_size;
-                if t%self.opts.buf_size != 0 {
-                    return m + 1
-                } else {
-                    return m
-                }
-            }
-        }
-        1
     }
 
     // advance stream position and return old settings for cur
@@ -221,41 +227,50 @@ impl<'a, R: Read> Stream<'a, R> {
             self.init()?;
         }
 
-        /*
-        println!("next buffer: {} is valid: {} (eof: {}, pos: {} of {})"
-                 , (self.cur.buf + 1) % self.opts.buf_num
-                 , self.valid[(self.cur.buf + 1) % self.opts.buf_num]
-                 , self.eof
-                 , self.cur.pos
-                 , self.bufs[self.cur.buf].len()
-        );
-        */
-
-        let d = if self.cur.pos <= self.bufs[self.cur.buf].len() {
-            self.bufs[self.cur.buf].len() - self.cur.pos
-        } else {
-            0
-        };
-
-        if self.eof && n > d && // self.bufs[self.cur.buf].len() - self.cur.pos &&
-           !self.valid[(self.cur.buf + 1) % self.opts.buf_num]
-        {
-            return Err(err_eof(self.cur));
-        }
-
         // fill next buffer(s) if necessary
-        if self.cur.pos + n >= self.bufs[self.cur.buf].len() {
-            let m = self.bufs_to_fill(n);
-            if m >= self.opts.buf_num {
-                return Err(err_exceeds_buffers(self.cur, m, self.opts.buf_num));
+        if self.cur.pos + n >= self.states[self.cur.buf].size {
+            let mut r = n;
+            if n >= self.opts.buf_num * self.opts.buf_size - self.opts.buf_num {
+                return Err(err_exceeds_buffers(self.cur, n/self.opts.buf_num, self.opts.buf_num));
             }
-            for i in 0 .. m {
-                let j = (self.cur.buf + i + 1)%self.opts.buf_num;
-                if !self.valid[j] {
-                    self.fill_buf(j)?;
-                    if self.bufs[j].len() > 0 {
-                       self.valid[j] = true;
+            let offset = if self.states[self.cur.buf].size == self.opts.buf_size {
+                1
+            } else {
+                0
+            };
+            for i in 0 .. self.opts.buf_num {
+                let j = (self.cur.buf + i + offset)%self.opts.buf_num;
+                let wanted = if self.states[j].size == self.opts.buf_size {
+                    if r > self.opts.buf_size {
+                        self.opts.buf_size
+                    } else {
+                       r
                     }
+                } else {
+                    if r > self.opts.buf_size - self.states[j].size {
+                        self.opts.buf_size - self.states[j].size
+                    } else {
+                        r
+                    }
+                };
+                if self.states[j].size < self.opts.buf_size || !self.states[j].valid {
+                    let d = if self.states[j].valid {
+                        self.states[j].size
+                    } else {
+                        0
+                    };
+                    self.fill_buf(j, wanted)?;
+                    if self.states[j].size > 0 {
+                       self.states[j].valid = true;
+                       if r > self.states[j].size - d {
+                           r -= self.states[j].size - d;
+                       } else {
+                           r = 0;
+                       }
+                    }
+                }
+                if r == 0 {
+                    break;
                 }
             }
         }
@@ -265,16 +280,25 @@ impl<'a, R: Read> Stream<'a, R> {
         self.advance(n);
 
         // should be >=
-        if self.cur.pos > self.bufs[self.cur.buf].len() {
+        if self.cur.pos > self.states[self.cur.buf].size {
+           /*
+           println!("this buffer: {} is valid: {} (pos: {} of {})"
+                 , self.cur.buf
+                 , self.states[self.cur.buf].valid
+                 , self.cur.pos
+                 , self.states[self.cur.buf].size
+           );
+           */
+
            if self.resettable(cur) {
                self.reset_cur(cur);
            }
-           self.eof = true;
+           
            return Err(err_eof(self.cur));
         }
 
         if !peek && cur.buf != self.cur.buf {
-            self.valid[cur.buf] = false;
+            self.states[cur.buf].valid = false;
         }
          
         Ok(cur)
@@ -290,7 +314,7 @@ impl<'a, R: Read> Stream<'a, R> {
         for i in 0..size {
             target[i] = self.bufs[buf][pos];
             pos += 1;
-            if pos >= self.bufs[buf].len() {
+            if pos >= self.states[buf].size {
                 buf = (buf + 1) % self.opts.buf_num;
                 pos = 0;
             }
@@ -356,7 +380,6 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut b1 = [0; 4];
         let mut b2 = [0; 4];
 
-        println!("chacacter: {}", ch);
         let n = ch.encode_utf8(&mut b1).len();
 
         let cur = self.consume(n, false)?;
@@ -565,10 +588,12 @@ impl<'a, R: Read> Stream<'a, R> {
         match self.bytes(&v[..]) {
             Ok(()) => Ok(()),
             Err(ParseError::Failed(ref s, _)) => match s.strip_prefix("expected byte") {
-                Some(_) => return Err(err_expected_string(self.cur, pattern)),
-                _ => return Err(ParseError::Failed(s.to_string(), self.cur)),
+                Some(_) => {
+                    return Err(err_expected_string(self.cur, pattern));
+                },
+                _ => Err(ParseError::Failed(s.to_string(), self.cur)),
             }
-            Err(e) => return Err(e),
+            Err(e) => Err(e),
         }
     }
 
@@ -668,10 +693,10 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut p = self.cur.pos;
         let mut x = self.cur.buf;
         for i in 0 .. l {
-            if p >= self.bufs[x].len() {
+            if p >= self.states[x].size {
                 x += 1;
                 x %= self.opts.buf_num;
-                if !self.valid[x] {
+                if !self.states[x].valid {
                     break;
                 }
                 p = 0;
@@ -689,7 +714,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut s = self.copy_from_bufs(buf)?;
         while s < l {
             match self.reader.read(&mut buf[s..]) {
-                Ok(0) => break,
+                Ok(0) => return Ok(0),
                 Ok(x) => s += x,
                 Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => return Err(ParseError::IOError(e)),
@@ -708,12 +733,13 @@ impl<'a, R: Read> Stream<'a, R> {
         let mut p = self.cur.pos;
         let mut x = self.cur.buf;
         loop {
-            if p < self.bufs[x].len() {
+            if p < self.states[x].size {
                 v.extend_from_slice(&self.bufs[x][p..]);
             }
+            self.states[x].valid = false;
             x += 1;
             x %= self.opts.buf_num;
-            if !self.valid[x] {
+            if !self.states[x].valid {
                break;
             }
             p = 0;
