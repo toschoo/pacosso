@@ -174,6 +174,8 @@ impl<'a, R: Read> Stream<'a, R> {
         self.cur.stream = cur.stream;
         self.cur.line = cur.line;
         self.cur.lpos = cur.lpos;
+
+        // the current buffer is always valid!
         self.states[cur.buf].valid = true;
     }
 
@@ -218,6 +220,22 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
+    fn bytes_to_read(&self, buf: usize, n: usize) -> usize {
+        if self.states[buf].size == self.opts.buf_size {
+           if n > self.opts.buf_size {
+               return self.opts.buf_size;
+           } else {
+               return n;
+           }
+        } else {
+            if n > self.opts.buf_size - self.states[buf].size {
+                return self.opts.buf_size - self.states[buf].size;
+            } else {
+                return n;
+            }
+        }
+    }
+
     // advance stream position and return old settings for cur
     fn consume(&mut self, n: usize, peek: bool) -> ParseResult<Cursor> {
         // check stream position
@@ -229,37 +247,47 @@ impl<'a, R: Read> Stream<'a, R> {
 
         // fill next buffer(s) if necessary
         if self.cur.pos + n >= self.states[self.cur.buf].size {
-            let mut r = n;
-            if n >= self.opts.buf_num * self.opts.buf_size - self.opts.buf_num {
+            let mut r = n; // what remains to be read
+
+            // pre-check if we have enough room to store the request
+            if n >= self.opts.buf_num * self.opts.buf_size - self.opts.buf_size {
                 return Err(err_exceeds_buffers(self.cur, n/self.opts.buf_num, self.opts.buf_num));
             }
+
+            // we only fill the current buffer if it is not completely filled
             let offset = if self.states[self.cur.buf].size == self.opts.buf_size {
                 1
             } else {
                 0
             };
+
             for i in 0 .. self.opts.buf_num {
+
+                // we are now looking at this buffer
                 let j = (self.cur.buf + i + offset)%self.opts.buf_num;
-                let wanted = if self.states[j].size == self.opts.buf_size {
-                    if r > self.opts.buf_size {
-                        self.opts.buf_size
-                    } else {
-                       r
-                    }
+
+                // a socket must wait for the number of bytes we need to make progress
+                // but we must not oblige it to read more than that
+                let wanted = if self.opts.is_stream {
+                    self.bytes_to_read(j, r)
                 } else {
-                    if r > self.opts.buf_size - self.states[j].size {
-                        self.opts.buf_size - self.states[j].size
-                    } else {
-                        r
-                    }
+                    0
                 };
+
+                // we only fill incomplete or invalid buffers
                 if self.states[j].size < self.opts.buf_size || !self.states[j].valid {
+
+                    // remember the size of the buffer we have now
                     let d = if self.states[j].valid {
                         self.states[j].size
                     } else {
                         0
                     };
+
                     self.fill_buf(j, wanted)?;
+
+                    // if we have read something, the buf is now valid
+                    // reduce the remainder by the amount we read
                     if self.states[j].size > 0 {
                        self.states[j].valid = true;
                        if r > self.states[j].size - d {
@@ -269,6 +297,8 @@ impl<'a, R: Read> Stream<'a, R> {
                        }
                     }
                 }
+
+                // we have read enough to make progress
                 if r == 0 {
                     break;
                 }
@@ -279,17 +309,8 @@ impl<'a, R: Read> Stream<'a, R> {
 
         self.advance(n);
 
-        // should be >=
+        // if the cursor points beyond of what we read, we reached the end of the stream
         if self.cur.pos > self.states[self.cur.buf].size {
-           /*
-           println!("this buffer: {} is valid: {} (pos: {} of {})"
-                 , self.cur.buf
-                 , self.states[self.cur.buf].valid
-                 , self.cur.pos
-                 , self.states[self.cur.buf].size
-           );
-           */
-
            if self.resettable(cur) {
                self.reset_cur(cur);
            }
@@ -297,7 +318,8 @@ impl<'a, R: Read> Stream<'a, R> {
            return Err(err_eof(self.cur));
         }
 
-        if !peek && cur.buf != self.cur.buf {
+        // invalidate the current buffer when we leave it
+        if cur.buf != self.cur.buf {
             self.states[cur.buf].valid = false;
         }
          
