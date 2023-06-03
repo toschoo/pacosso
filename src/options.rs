@@ -5,7 +5,6 @@ pub struct Opts {
     pub buf_size: usize,
     pub buf_num: usize,
     pub max_stream: u64,
-    pub is_stream: bool,
 }
 
 impl Default for Opts {
@@ -14,7 +13,6 @@ impl Default for Opts {
             buf_size: 8192,
             buf_num: 5,
             max_stream: u32::MAX as u64,
-            is_stream: false,
         }
     }
 }
@@ -28,7 +26,6 @@ impl Opts {
             buf_size: s,
             buf_num: self.buf_num,
             max_stream: self.max_stream,
-            is_stream: self.is_stream,
         }
     }
     pub fn set_buf_num(self, s: usize) -> Opts {
@@ -36,7 +33,6 @@ impl Opts {
             buf_size: self.buf_size,
             buf_num: s,
             max_stream: self.max_stream,
-            is_stream: self.is_stream,
         }
     }
     pub fn set_max_stream(self, s: u64) -> Opts {
@@ -44,7 +40,6 @@ impl Opts {
             buf_size: self.buf_size,
             buf_num: self.buf_num,
             max_stream: s,
-            is_stream: self.is_stream,
         }
     }
     pub fn set_infinite_stream(self) -> Opts {
@@ -52,15 +47,6 @@ impl Opts {
             buf_size: self.buf_size,
             buf_num: self.buf_num,
             max_stream: 0,
-            is_stream: self.is_stream,
-        }
-    }
-    pub fn set_stream(self) -> Opts {
-        Opts {
-            buf_size: self.buf_size,
-            buf_num: self.buf_num,
-            max_stream: self.max_stream,
-            is_stream: true,
         }
     }
     pub fn validate(&self) -> ParseResult<()> {

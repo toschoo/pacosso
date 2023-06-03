@@ -210,11 +210,9 @@ impl<'a, R: Read> Stream<'a, R> {
                 },
                 Ok(x) => {
                     s += x;
-                    self.states[n].size = s; // redundant
+                    self.states[n].size = s;
                     if s < self.opts.buf_size {
-                       if !self.opts.is_stream {
-                           continue;
-                       } else if s < wanted {
+                       if wanted > 0 && s < wanted {
                            continue;
                        }
                     }
@@ -276,11 +274,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
                 // a socket must wait for the number of bytes we need to make progress
                 // but we must not oblige it to read more than that
-                let wanted = if self.opts.is_stream {
-                    self.bytes_to_read(j, r)
-                } else {
-                    0
-                };
+                let wanted = self.bytes_to_read(j, r);
 
                 // we only fill incomplete or invalid buffers
                 if self.states[j].size < self.opts.buf_size || !self.states[j].valid {
