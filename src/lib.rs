@@ -1,3 +1,22 @@
+//! _Pacosso_ is a framework for rapid parser development.
+//! It does not aim at building high-performance parsers -
+//! other frameworks are much more suitable for that -
+//! but rather at easy development for rapid prototyping
+//! and projects with moderate performance requirements.
+//! 
+//! Different from other streaming parser libraries,
+//! _pacosso_ manages the incoming stream internally.
+//! The feature is intended to make writing parsers
+//! as easy as possible.
+//! _Pacosso_ is able to handle any reader including
+//! in-memory buffers and strings, files, sockets and
+//! IO-chains combining such readers.
+//! 
+//! [Jsosso] is a JSON parser that demonstrates the framework.
+//! It contains demo programs, benchmarks and more documentation.
+//! 
+//! [Jsosso]: https://github.com/toschoo/jsosso
+
 use std::io::{self, Read, ErrorKind};
 use std::ffi::OsString;
 use std::fs::File;
@@ -11,22 +30,27 @@ pub use self::options::{Opts};
 pub mod error;
 pub use self::error::*;
 
+/// Parser methods return a `Result` of a generic type and a ParseError 
 pub type ParseResult<T> = Result<T, ParseError>;
-pub type ParseChain<'a, R> = ParseResult<io::Chain<io::Cursor<Vec<u8>>, &'a mut R>>;
 
+/// Cursor keeps track of the position
+/// in the overall stream,
+/// in terms of lines in the stream and
+/// within the current line.
+/// ParserErrors contain a cursor to point to the position
+/// where the parser failed.
 #[derive(Debug, Clone, Copy)]
 pub struct Cursor {
     buf: usize,
     pos: usize,
+    /// The current position in the the overall stream
     pub stream: u64,
+    /// The current position in terms of lines in the stream.
+    /// Note that lines are, currently, only counted as whitespace.
+    /// This is somewhat sloppy and a better solution will be needed.
     pub line: u64,
+    /// The current position within the current line
     pub lpos: u64,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct BufState {
-    valid: bool,
-    size: usize,
 }
 
 impl fmt::Display for Cursor {
@@ -36,18 +60,64 @@ impl fmt::Display for Cursor {
     }
 }
 
+type Buf = Vec<u8>;
+
+#[derive(Debug, Clone, Copy)]
+struct BufState {
+    valid: bool,
+    size: usize,
+}
+
+/// Stream manages the reader from which to parse.
+/// Streams can be built from any reader including
+/// in-memory buffers and strings, files, sockets
+/// and `io::Chain`s.
 pub struct Stream<'a, R: Read> {
+    // the data source
     reader: &'a mut R,
+    // internal buffers
     bufs: Vec<Buf>, 
+    // state of the buffers
     states: Vec<BufState>,
+    // current position in the stream
     cur: Cursor,
+    // options defined by the creator
     opts: Opts,
+    // have we already initialised this stream?
     inited: bool,
+    // table of whitespace bytes
     white_space: HashSet<u8>,
 }
 
-type Buf = Vec<u8>;
-
+/// Convenience interface for parsing from a file.
+///
+/// Parameters:
+///
+/// * `f` - The path to the file as `OsString`
+///
+/// * `opts` - Options for `Stream` 
+///
+/// * `parse` - The parser function or closure
+///
+/// Example:
+/// ```
+/// use std::fs::File;
+/// use std::ffi::OsString;
+/// use pacosso::{Stream, parse_file, ParseResult};
+/// use pacosso::options::Opts;
+///
+/// let parse = |p: &mut Stream<File>| -> ParseResult<()> {
+///     p.succeed() // the simplest possible parser
+/// };
+///
+/// assert!(match parse_file("./Cargo.toml".into(), Opts::default(), parse) {
+///     Ok(()) => true,
+///     Err(e) => {
+///        eprintln!("error: {:?}", e);
+///        false
+///     },
+/// });
+/// ```
 pub fn parse_file<F, T>(f: OsString, opts: Opts, parse: F) -> ParseResult<T> 
          where F: Fn(&mut Stream<File>) -> ParseResult<T>
 {
@@ -60,6 +130,36 @@ pub fn parse_file<F, T>(f: OsString, opts: Opts, parse: F) -> ParseResult<T>
     }
 }
 
+/// Convenience interface for parsing a string.
+///
+/// Parameters:
+///
+/// * `s` - The string to parse
+///
+/// * `opts` - Options for `Stream` 
+///
+/// * `parse` - The parser function or closure
+///
+/// Example:
+/// ```
+/// use std::io;
+/// use pacosso::{Stream, parse_string, ParseResult};
+/// use pacosso::options::Opts;
+///
+/// let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> {
+///     p.string("hello")?;
+///     p.whitespace()?;
+///     p.string("world")
+/// };
+///
+/// assert!(match parse_string("hello world".to_string(), Opts::default(), parse) {
+///     Ok(()) => true,
+///     Err(e) => {
+///        eprintln!("error: {:?}", e);
+///        false
+///     },
+/// });
+/// ```
 pub fn parse_string<F, T>(s: String, opts: Opts, parse: F) -> ParseResult<T> 
          where F: Fn(&mut Stream<io::Cursor<Vec<u8>>>) -> ParseResult<T>
 {
@@ -69,6 +169,24 @@ pub fn parse_string<F, T>(s: String, opts: Opts, parse: F) -> ParseResult<T>
 }
 
 impl<'a, R: Read> Stream<'a, R> {
+
+   /// Stream constructor.
+   ///
+   /// Parameters: 
+   ///
+   /// * `opts` - the stream options
+   ///
+   /// * `reader` - the reader from which to parse
+   ///
+   /// Example:
+   /// ```
+   /// use std::io;
+   /// use pacosso::{Stream, ParseResult};
+   /// use pacosso::options::Opts;
+   /// let mut input =  io::Cursor::new("hello world".as_bytes().to_vec());
+   /// let s = Stream::new(Opts::default(), &mut input);
+   /// /* do something with s */
+   /// ```
    pub fn new(opts: Opts, reader: &'a mut R) -> Stream<R> {
        let mut buf = Vec::with_capacity(opts.buf_num);
        for _ in 0..opts.buf_num {
@@ -123,18 +241,34 @@ impl<'a, R: Read> Stream<'a, R> {
        Ok(())
     }
 
+    /// Returns the size of internal buffers
+    /// as defined by means of `Opts`.
     pub fn buf_size(self) -> usize {
         self.opts.buf_size
     }
 
+    /// Returns the number of internal buffers
+    /// as defined by means of `Opts`.
     pub fn buf_num(self) -> usize {
         self.opts.buf_num
     }
 
+    /// Returns the maximal stream size
+    /// as defined by means of `Opts`.
+    /// If stream size is 0, the stream is infinite.
     pub fn max_stream(self) -> u64 {
         self.opts.max_stream
     }
 
+    /// Defines the bytes that serve as whitespace.
+    /// 
+    /// By default whitespace bytes are:
+    /// '` `', '`\n`', '`\r`' and '`\t`'.
+    /// Note that currently only bytes can be defined as whitespace.
+    /// Unicode characters outside the range of ASCII code cannot be used.
+    ///
+    /// Note further that if your set of whitespace bytes does not contain
+    /// linebreaks, lines won't be counted.
     pub fn set_whitespace(&mut self, w: Vec<u8>) {
         self.white_space = HashSet::new();
         for c in w {
@@ -142,10 +276,13 @@ impl<'a, R: Read> Stream<'a, R> {
         }
     }
 
+    /// Returns the cursor pointing to the current position.
     pub fn position(&self) -> Cursor {
         self.cur
     }
 
+    /// Increments the line counter by one.
+    /// Use this method if you don't have defined linebreak as whitespace.
     pub fn count_lines(&mut self) {
         self.cur.line += 1;
         self.cur.lpos  = 1;
@@ -356,14 +493,29 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
+    /// The simplest possible parser. It always succeeds.
     pub fn succeed(&mut self) -> ParseResult<()> {
         Ok(())
     }
 
+    /// Causes the parser to fail with error message `msg`.
+    /// The parameter `dummy` defines the return type
+    /// that would otherwise remain invisible.
+    ///
+    /// Example:
+    ///
+    /// ```
+    /// use std::io;
+    /// use pacosso::{Stream, ParseResult};
+    /// use pacosso::options::Opts;
+    /// let mut input = io::Cursor::new("hello world".as_bytes().to_vec());
+    /// Stream::new(Opts::default(), &mut input).fail("cannot parse 'hello world'", ());
+    /// ```
     pub fn fail<T>(&mut self, msg: &str, _dummy: T) -> ParseResult<T> {
         Err(ParseError::Failed(msg.to_string(), self.cur))
     }
 
+    /// Succeeds if the we reached the end of the input and fails otherwise.
     pub fn eof(&mut self) -> ParseResult<()> {
         match self.consume(1) {
             Ok(cur) => {
@@ -375,6 +527,7 @@ impl<'a, R: Read> Stream<'a, R> {
         }
     }
 
+    /// Consumes one byte and succeeds if this byte is `ch` and fails otherwise.
     pub fn byte(&mut self, ch: u8) -> ParseResult<()> {
         let cur = self.consume(1)?;
         let b = self.get(cur);
@@ -386,6 +539,8 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
+    /// Consumes one byte and succeeds if this byte is in the set `bs` and fails otherwise.
+    // use set instead!
     pub fn one_of_bytes(&mut self, bs: &[u8]) -> ParseResult<()> {
         for b in bs {
             match self.byte(*b) {
@@ -400,6 +555,7 @@ impl<'a, R: Read> Stream<'a, R> {
         Err(err_expected_one_of_bytes(self.cur, bs))
     }
 
+    /// Consumes up to 4 bytes and succeeds if those equal `ch` and fails otherwise.
     pub fn character(&mut self, ch: char) -> ParseResult<()> {
         let mut b1 = [0; 4];
         let mut b2 = [0; 4];
@@ -448,6 +604,8 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
+    /// Consumes up to 4 bytes and succeeds if those equal `ch` and fails otherwise.
+    // should be a set
     pub fn one_of_chars(&mut self, cs: &[char]) -> ParseResult<()> {
         for c in cs {
             match self.character(*c) {
