@@ -107,6 +107,7 @@ impl<'a, R: Read> Stream<'a, R> {
            self.states[i].size  = self.opts.buf_size;
        }
 
+       self.cur.stream = 0;
        self.cur.line = 0;
        self.cur.lpos = 0;
        self.cur.buf = 0;
@@ -234,8 +235,9 @@ impl<'a, R: Read> Stream<'a, R> {
                return n;
            }
         } else {
-            if n > self.opts.buf_size - self.states[buf].size {
-                return self.opts.buf_size - self.states[buf].size;
+            let d = self.opts.buf_size - self.states[buf].size;
+            if n > d {
+                return d;
             } else {
                 return n;
             }
