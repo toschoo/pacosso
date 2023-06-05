@@ -1,4 +1,4 @@
-# Pacosso - a kind of streaming parser combinator framework
+# Pacosso - a kind of streaming parser combinator framework for Rust
 
 _Pacosso_ is a framework for rapid parser development.
 It does not aim at building high-performance parsers -

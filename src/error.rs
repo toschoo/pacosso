@@ -167,9 +167,9 @@ pub fn err_expected_one_of_strings(c: Cursor, expected: &[&str]) -> ParseError {
     )
 }
 
-pub fn err_expected_char(c: Cursor, expected: char) -> ParseError {
+pub fn err_expected_char(c: Cursor, expected: char, have: &[u8]) -> ParseError {
     ParseError::Failed(format!(
-       "expected char: {}", expected),
+       "expected char: {}, have: {:?}", expected, have),
         c,
     )
 }
