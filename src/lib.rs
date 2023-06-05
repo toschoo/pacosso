@@ -168,6 +168,44 @@ pub fn parse_string<F, T>(s: String, opts: Opts, parse: F) -> ParseResult<T>
     parse(&mut p)
 }
 
+/// Convenience interface for parsing a byte buffer.
+///
+/// Parameters:
+///
+/// * `buf` - The buffer to parse
+///
+/// * `opts` - Options for `Stream` 
+///
+/// * `parse` - The parser function or closure
+///
+/// Example:
+/// ```
+/// use std::io;
+/// use pacosso::{Stream, parse_buffer, ParseResult};
+/// use pacosso::options::Opts;
+///
+/// let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> {
+///     p.string("hello")?;
+///     p.whitespace()?;
+///     p.string("world")
+/// };
+///
+/// assert!(match parse_buffer(&"hello world".as_bytes().to_vec(), Opts::default(), parse) {
+///     Ok(()) => true,
+///     Err(e) => {
+///        eprintln!("error: {:?}", e);
+///        false
+///     },
+/// });
+/// ```
+pub fn parse_buffer<F, T>(buf: &[u8], opts: Opts, parse: F) -> ParseResult<T>
+         where F: Fn(&mut Stream<io::Cursor<Vec<u8>>>) -> ParseResult<T>
+{
+    let mut input = io::Cursor::new(buf.to_vec());
+    let mut p = Stream::new(opts, &mut input);
+    parse(&mut p)
+}
+
 impl<'a, R: Read> Stream<'a, R> {
 
    /// Stream constructor.
