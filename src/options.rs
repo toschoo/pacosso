@@ -5,6 +5,14 @@ use crate::*;
 /// Instead the setters should be used.
 /// Otherwise your code may not be compatible
 /// with future versions of the library.
+///
+/// Getting the sizing right for your parser is important.
+/// When parsers fail, the stream is set back to the position
+/// before the error occurred. If the buffers are too small
+/// to account for what was consumed since then, the stream
+/// is left in an unusable state. On the other hand,
+/// creating a stream with gigantic buffers is not efficient
+/// when dealing with small amounts of input.
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Opts {
     /// Size of buffers in the stream.
