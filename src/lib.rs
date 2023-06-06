@@ -600,17 +600,14 @@ impl<'a, R: Read> Stream<'a, R> {
     /// Consumes one byte and succeeds if this byte is in the set `bs` and fails otherwise.
     // we could use a set here. However, to create the set, we touch all elements once anyway.
     pub fn one_of_bytes(&mut self, bs: &[u8]) -> ParseResult<()> {
+        let x = self.peek_byte()?;
         for b in bs {
-            match self.byte(*b) {
-                Ok(()) => return Ok(()),
-                Err(ParseError::Failed(x, _)) => match x.strip_prefix("expected byte:") {
-                    Some(_) => continue,
-                    None => return Err(ParseError::Failed(x, self.cur)),
-                }
-                Err(e) => return Err(e),
+            if x == *b {
+                self.byte(x)?;
+                return Ok(());
             }
         }
-        Err(err_expected_one_of_bytes(self.cur, bs))
+        Err(err_expected_one_of_bytes(self.cur, bs, x))
     }
 
     /// Consumes `pattern.len()` bytes and succeeds if these bytes equal `pattern` and fails otherwise.
@@ -692,14 +689,14 @@ impl<'a, R: Read> Stream<'a, R> {
     /// Consumes up to 4 bytes and succeeds if the bytes read correspond
     /// to a character in the set `cs` and fails otherwise.
     pub fn one_of_chars(&mut self, cs: &[char]) -> ParseResult<()> {
+        let x = self.peek_character()?;
         for c in cs {
-            match self.character(*c) {
-                Ok(()) => return Ok(()),
-                Err(e) if e.is_expected_token() => continue,
-                Err(e) => return Err(e),
+            if x == *c {
+                self.character(x)?;
+                return Ok(());
             }
         }
-        Err(err_expected_one_of_chars(self.cur, cs))
+        Err(err_expected_one_of_chars(self.cur, cs, x))
     }
 
     fn len_of_char(&self, b: u8) -> usize {
@@ -874,7 +871,7 @@ impl<'a, R: Read> Stream<'a, R> {
         let s = self.get_string(n)?;
         if s != pattern {
             self.reset_cur(cur);
-            return Err(err_expected_string(self.cur, pattern));
+            return Err(err_expected_string(self.cur, pattern, &s));
         }
         Ok(())
     }
@@ -901,7 +898,7 @@ impl<'a, R: Read> Stream<'a, R> {
 
         if s.to_uppercase() != pattern.to_uppercase() {
             self.reset_cur(cur);
-            return Err(err_expected_string(self.cur, pattern));
+            return Err(err_expected_string(self.cur, pattern, &s));
         }
  
         Ok(())
