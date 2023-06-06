@@ -146,16 +146,16 @@ pub fn err_expected_byte(c: Cursor, expected: u8, have: u8) -> ParseError {
     )
 }
 
-pub fn err_expected_one_of_bytes(c: Cursor, expected: &[u8]) -> ParseError {
+pub fn err_expected_one_of_bytes(c: Cursor, expected: &[u8], have: u8) -> ParseError {
     ParseError::Failed(format!(
-       "expected one of the bytes: {:?}", expected),
+       "expected one of the bytes: {:?}, have: {}", expected, have),
         c,
     )
 }
 
-pub fn err_expected_one_of_chars(c: Cursor, expected: &[char]) -> ParseError {
+pub fn err_expected_one_of_chars(c: Cursor, expected: &[char], have: char) -> ParseError {
     ParseError::Failed(format!(
-       "expected one of the characters: {:?}", expected),
+       "expected one of the characters: {:?}, have: {}", expected, have),
         c,
     )
 }
@@ -194,9 +194,9 @@ pub fn err_utf8_error(c: Cursor, have: Vec<u8>) -> ParseError {
     )
 }
 
-pub fn err_expected_string(c: Cursor, expected: &str) -> ParseError {
+pub fn err_expected_string(c: Cursor, expected: &str, have: &str) -> ParseError {
     ParseError::Failed(format!(
-        "expected string: {}", expected),
+        "expected string: {}, have: {}", expected, have),
         c,
     )
 }
