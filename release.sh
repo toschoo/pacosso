@@ -1,4 +1,4 @@
-if [ $# -lt 2 ]
+if [ $# -lt 1 ]
 then
     echo "I need a release tag"
     exit 1
