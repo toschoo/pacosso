@@ -133,11 +133,16 @@ impl ParseError {
     ///
     /// * expected string
     ///
-    /// * expected on of bytes
+    /// * expected one of bytes
     ///
-    /// * expected on of characters
+    /// * expected one of characters
     ///
-    /// * expected on of strings
+    /// * expected one of strings
+    ///
+    /// * expected ascii digit
+    ///
+    /// * expected whitespace
+    ///
     pub fn is_expected_token(&self) -> bool {
         match self {
             ParseError::Failed(s, _) =>
@@ -177,92 +182,88 @@ impl ParseError {
     }
 }
 
-pub fn err_not_impl(c: Cursor) -> ParseError {
-    ParseError::Failed("not yet implemented".to_string(), c)
-}
-
-pub fn err_eof(c: Cursor) -> ParseError {
+pub(crate) fn err_eof(c: Cursor) -> ParseError {
     ParseError::Failed("end of file".to_string(), c)
 }
 
-pub fn err_not_eof(c: Cursor) -> ParseError {
+pub(crate) fn err_not_eof(c: Cursor) -> ParseError {
     ParseError::Failed("not the end of file".to_string(), c)
 }
 
-pub fn err_exceeds_buffers(c: Cursor, needed: usize, have: usize) -> ParseError {
+pub(crate) fn err_exceeds_buffers(c: Cursor, needed: usize, have: usize) -> ParseError {
     ParseError::Failed(format!(
        "parser needs more buffer space ({}) than available ({})", needed, have),
        c,
     )
 }
 
-pub fn err_expected_byte(c: Cursor, expected: u8, have: u8) -> ParseError {
+pub(crate) fn err_expected_byte(c: Cursor, expected: u8, have: u8) -> ParseError {
     ParseError::Failed(format!(
        "expected byte: {}, have: {}", expected, have),
        c,
     )
 }
 
-pub fn err_expected_char(c: Cursor, expected: char, have: &[u8]) -> ParseError {
+pub(crate) fn err_expected_char(c: Cursor, expected: char, have: &[u8]) -> ParseError {
     ParseError::Failed(format!(
        "expected char: {}, have: {:?}", expected, have),
         c,
     )
 }
 
-pub fn err_expected_string(c: Cursor, expected: &str, have: &str) -> ParseError {
+pub(crate) fn err_expected_string(c: Cursor, expected: &str, have: &str) -> ParseError {
     ParseError::Failed(format!(
         "expected string: {}, have: {}", expected, have),
         c,
     )
 }
 
-pub fn err_expected_one_of_bytes(c: Cursor, expected: &[u8], have: u8) -> ParseError {
+pub(crate) fn err_expected_one_of_bytes(c: Cursor, expected: &[u8], have: u8) -> ParseError {
     ParseError::Failed(format!(
        "expected one of the bytes: {:?}, have: {}", expected, have),
         c,
     )
 }
 
-pub fn err_expected_one_of_chars(c: Cursor, expected: &[char], have: char) -> ParseError {
+pub(crate) fn err_expected_one_of_chars(c: Cursor, expected: &[char], have: char) -> ParseError {
     ParseError::Failed(format!(
        "expected one of the characters: {:?}, have: {}", expected, have),
         c,
     )
 }
 
-pub fn err_expected_one_of_strings(c: Cursor, expected: &[&str]) -> ParseError {
+pub(crate) fn err_expected_one_of_strings(c: Cursor, expected: &[&str]) -> ParseError {
     ParseError::Failed(format!(
        "expected one of the strings: {:?}", expected),
         c,
     )
 }
 
-pub fn err_expected_whitespace(c: Cursor, have: u8) -> ParseError {
+pub(crate) fn err_expected_whitespace(c: Cursor, have: u8) -> ParseError {
     ParseError::Failed(format!(
        "expected whitespace, have: {}", have),
         c,
     )
 }
 
-pub fn err_not_a_digit(c: Cursor, have: u8) -> ParseError {
+pub(crate) fn err_not_a_digit(c: Cursor, have: u8) -> ParseError {
     ParseError::Failed(format!(
        "expected ascii digit, have: {}", have),
         c,
     )
 }
 
-pub fn err_utf8_error(c: Cursor, have: Vec<u8>) -> ParseError {
+pub(crate) fn err_utf8_error(c: Cursor, have: Vec<u8>) -> ParseError {
     ParseError::Failed(format!("utf8 encoding error in '{:?}'", have),
         c,
     )
 }
 
-pub fn err_all_failed(c: Cursor, v: Vec<Box<ParseError>>) -> ParseError {
+pub(crate) fn err_all_failed(c: Cursor, v: Vec<Box<ParseError>>) -> ParseError {
     ParseError::Effect("all parsers of a choice failed".to_string(), c, v)
 }
 
-pub fn err_fatal(e: ParseError) -> ParseError {
+pub(crate) fn err_fatal(e: ParseError) -> ParseError {
     ParseError::Fatal(Box::new(e))
 }
 

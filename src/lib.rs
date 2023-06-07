@@ -11,6 +11,30 @@
 //! _Pacosso_ is able to handle any reader including
 //! in-memory buffers and strings, files, sockets and
 //! IO-chains combining such readers.
+//!
+//! Example:
+//! ```
+//! use std::io;
+//! use pacosso::{Stream, ParseResult};
+//! use pacosso::options::Opts;
+//!
+//! let parse = |p: &mut Stream<io::Cursor<Vec<u8>>>| -> ParseResult<()> {
+//!     p.string("hello")?;
+//!     p.whitespace()?;
+//!     p.string("world")
+//! };
+//!
+//! let mut input = io::Cursor::new("hello world".as_bytes().to_vec());
+//! let mut s = Stream::new(Opts::default(), &mut input);
+//!
+//! assert!(match s.apply(parse) {
+//!     Ok(()) => true,
+//!     Err(e) => {
+//!        eprintln!("error: {:?}", e);
+//!        false
+//!     },
+//! });
+//! ```
 //! 
 //! [Jsosso] is a JSON parser that demonstrates the framework.
 //! It contains demo programs, benchmarks and more documentation.
@@ -37,7 +61,10 @@ pub type ParseResult<T> = Result<T, ParseError>;
 /// in the overall stream,
 /// in terms of lines in the stream and
 /// within the current line.
-/// ParserErrors contain a cursor to point to the position
+/// Note that, for `stream`, the start position is 0,
+/// while, for `line` and `lpos`, the start position is 1.
+///
+/// `ParseError`s contain a cursor to point to the position
 /// where the parser failed.
 #[derive(Debug, Clone, Copy)]
 pub struct Cursor {
@@ -72,6 +99,15 @@ struct BufState {
 /// Streams can be built from any reader including
 /// in-memory buffers and strings, files, sockets
 /// and `io::Chain`s.
+///
+/// Example:
+/// ```
+/// use std::io;
+/// use pacosso::Stream;
+/// use pacosso::options::Opts;
+/// let mut input = io::Cursor::new("hello world".as_bytes().to_vec());
+/// let s = Stream::new(Opts::default(), &mut input);
+/// /* do something with s */
 pub struct Stream<'a, R: Read> {
     // the data source
     reader: &'a mut R,
@@ -219,7 +255,7 @@ impl<'a, R: Read> Stream<'a, R> {
    /// Example:
    /// ```
    /// use std::io;
-   /// use pacosso::{Stream, ParseResult};
+   /// use pacosso::Stream;
    /// use pacosso::options::Opts;
    /// let mut input = io::Cursor::new("hello world".as_bytes().to_vec());
    /// let s = Stream::new(Opts::default(), &mut input);
@@ -307,20 +343,68 @@ impl<'a, R: Read> Stream<'a, R> {
     ///
     /// Note further that if your set of whitespace bytes does not contain
     /// linebreaks, lines won't be counted.
-    pub fn set_whitespace(&mut self, w: Vec<u8>) {
-        self.white_space = HashSet::new();
-        for c in w {
-            self.white_space.insert(c);
-        }
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::{Stream, ParseResult};
+    /// use pacosso::options::Opts;
+    /// let mut input = io::Cursor::new(" - _ - ".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// s.set_whitespace(&[b'-', b'_']);
+    /// assert!(match s.whitespace() {
+    ///     Ok(()) => false,
+    ///     Err(e) if e.is_expected_token() => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.byte(b' ') {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.whitespace() {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.byte(b' ') {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
+    pub fn set_whitespace(&mut self, w: &[u8]) {
+        self.white_space = w.to_vec().into_iter().collect();
     }
 
     /// Returns the cursor pointing to the current position.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::{Stream, ParseResult};
+    /// use pacosso::options::Opts;
+    /// let mut input = io::Cursor::new("hello world".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert_eq!(s.position().stream, 0);
+    /// assert_eq!(s.position().line, 1);
+    /// assert_eq!(s.position().lpos, 1);
+    /// ```
     pub fn position(&self) -> Cursor {
         self.cur
     }
 
     /// Increments the line counter by one.
     /// Use this method if you don't have defined linebreak as whitespace.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::{Stream, ParseResult};
+    /// use pacosso::options::Opts;
+    /// let mut input = io::Cursor::new("hello world".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// s.count_lines();
+    /// assert_eq!(s.position().line, 2);
+    /// assert_eq!(s.position().lpos, 1);
+    /// ```
     pub fn count_lines(&mut self) {
         self.cur.line += 1;
         self.cur.lpos  = 1;
@@ -532,6 +616,7 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     /// The simplest possible parser. It always succeeds and does not consume anything.
+    ///
     /// Example:
     ///
     /// ```
@@ -553,7 +638,6 @@ impl<'a, R: Read> Stream<'a, R> {
     /// that would otherwise remain invisible.
     ///
     /// Example:
-    ///
     /// ```
     /// use std::io;
     /// use pacosso::{Stream, ParseResult};
@@ -573,6 +657,18 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Succeeds if the we reached the end of the input and fails otherwise.
     /// Does not consume anything.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// let mut input = io::Cursor::new("".as_bytes().to_vec());
+    /// assert!(match Stream::new(Opts::default(), &mut input).eof() {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn eof(&mut self) -> ParseResult<()> {
         match self.consume(1) {
             Ok(cur) => {
@@ -586,6 +682,33 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Consumes one byte and succeeds if this byte is `ch` and fails otherwise.
     /// Like all parser methods, it does not consume anything when failing.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("@".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// // fail
+    /// assert!(match s.byte(b'a') {
+    ///     Ok(()) => false,
+    ///     Err(e) if e.is_expected_token() => true,
+    ///     Err(_) => false,
+    /// });
+    /// // we did not consume anything
+    /// assert!(match s.byte(b'@') {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// // we have consumed one byte and will fail now
+    /// assert!(match s.byte(b'@') {
+    ///     Ok(_) => false,
+    ///     Err(e) if e.is_eof() => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn byte(&mut self, ch: u8) -> ParseResult<()> {
         let cur = self.consume(1)?;
         let b = self.get(cur);
@@ -598,6 +721,25 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     /// Consumes one byte and succeeds if this byte is in the set `bs` and fails otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("@".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.one_of_bytes(&[b'a', b'b', b'c']) {
+    ///     Ok(()) => false,
+    ///     Err(e) if e.is_expected_token() => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.one_of_bytes(&[b'a', b'b', b'@']) {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     // we could use a set here. However, to create the set, we touch all elements once anyway.
     pub fn one_of_bytes(&mut self, bs: &[u8]) -> ParseResult<()> {
         let x = self.peek_byte()?;
@@ -611,6 +753,25 @@ impl<'a, R: Read> Stream<'a, R> {
     }
 
     /// Consumes `pattern.len()` bytes and succeeds if these bytes equal `pattern` and fails otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("hello".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.bytes(&[b'h', b'a', b'l', b'l', b'o']) {
+    ///     Ok(()) => false,
+    ///     Err(e) if e.is_expected_token() => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.bytes(&[b'h', b'e', b'l', b'l', b'o']) {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn bytes(&mut self, pattern: &[u8]) -> ParseResult<()> {
         let n = pattern.len();
         self.check_excess(n)?;
@@ -630,6 +791,26 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Consumes one byte and returns it. Fails if there are no more bytes to consume
     /// and succeeds otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("@".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.any_byte() {
+    ///     Ok(b'@') => true,
+    ///     Ok(_) => false,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.any_byte() {
+    ///     Ok(_) => false,
+    ///     Err(e) if e.is_eof() => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn any_byte(&mut self) -> ParseResult<u8> {
         let cur = self.consume(1)?;
         let ch = self.get(cur);
@@ -638,6 +819,20 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Consumes up to `n` bytes and returns them in a vector;
     /// fails if there are less than `n` bytes left in the stream.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("hello".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.get_bytes(5) {
+    ///     Ok(v) => v == [b'h', b'e', b'l', b'l', b'o'],
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn get_bytes(&mut self, n: usize) -> ParseResult<Vec<u8>> {
 
         self.check_excess(n)?;
@@ -654,6 +849,20 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Consumes up to 4 bytes and succeeds if the bytes read correspond
     /// to `ch` and fails otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("京".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.character('京') {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn character(&mut self, ch: char) -> ParseResult<()> {
         let mut b1 = [0; 4];
         let mut b2 = [0; 4];
@@ -688,6 +897,20 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Consumes up to 4 bytes and succeeds if the bytes read correspond
     /// to a character in the set `cs` and fails otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("京".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.one_of_chars(&['@', 'ß', '京']) {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn one_of_chars(&mut self, cs: &[char]) -> ParseResult<()> {
         let x = self.peek_character()?;
         for c in cs {
@@ -722,6 +945,20 @@ impl<'a, R: Read> Stream<'a, R> {
     /// Fails if there are not enough bytes to consume
     /// or if those byte do not form a valid unicode char;
     /// succeeds otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("京".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.any_character() {
+    ///     Ok(ch) => ch == '京',
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn any_character(&mut self) -> ParseResult<char> {
         let mut bs = [0; 4];
 
@@ -761,6 +998,20 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Consumes one byte and succeeds if this byte is the ASCII encoding of a digit,
     /// i.e. the byte is `>= 48` and `<= 57`; fails otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("1 2 3".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.digit() {
+    ///     Ok(n) => n == b'1', // note that we are reading an ASCII byte, not a number
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn digit(&mut self) -> ParseResult<u8> {
         let cur = self.consume(1)?;
         let ch = self.get(cur);
@@ -773,6 +1024,33 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Calls `digit()` until it fails. Succeeds if digit succeeds at least once
     /// and fails otherwise.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("123 4 5".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.digits() {
+    ///     Ok(v) => v == [b'1', b'2', b'3'],
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.digits() {
+    ///     Ok(_) => false,
+    ///     Err(e) if e.is_expected_token() => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.byte(b' ') {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.digits() {
+    ///     Ok(v) => v == [b'4'],
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn digits(&mut self) -> ParseResult<Vec<u8>> {
         let mut first = true;
         let mut v = Vec::new();
@@ -805,6 +1083,29 @@ impl<'a, R: Read> Stream<'a, R> {
     /// Consumes bytes until it sees the first byte that is not in the whitespace set.
     /// Succeeds if at least one whitespace was read and fails otherwise.
     /// To just ignore whitespace (without failing), use `set_whitespace`.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("1 2 3".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.digit() {
+    ///     Ok(n) => n == b'1',
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.whitespace() {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.whitespace() {
+    ///     Ok(()) => false,
+    ///     Err(e) if e.is_expected_token() => true,
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn whitespace(&mut self) -> ParseResult<()> {
         let mut first = true;
         loop {
@@ -844,6 +1145,32 @@ impl<'a, R: Read> Stream<'a, R> {
 
     /// Consumes bytes until it sees the first byte that is not in the whitespace set;
     /// `skip_whitespace` always succeeds.
+    ///
+    /// Example:
+    /// ```
+    /// use std::io;
+    /// use pacosso::Stream;
+    /// use pacosso::options::Opts;
+    /// use pacosso::error::ParseError;
+    /// let mut input = io::Cursor::new("1 2 3".as_bytes().to_vec());
+    /// let mut s = Stream::new(Opts::default(), &mut input);
+    /// assert!(match s.digit() {
+    ///     Ok(n) => n == b'1',
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.skip_whitespace() {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.skip_whitespace() {
+    ///     Ok(()) => true,
+    ///     Err(_) => false,
+    /// });
+    /// assert!(match s.digit() {
+    ///     Ok(n) => n == b'2',
+    ///     Err(_) => false,
+    /// });
+    /// ```
     pub fn skip_whitespace(&mut self) -> ParseResult<()> {
         let _ = self.whitespace();
         Ok(())
@@ -1097,7 +1424,6 @@ impl<'a, R: Read> Stream<'a, R> {
     ///     something completely different here".as_bytes().to_vec());
     /// let v = {
     ///    let mut s = Stream::new(Opts::default(), &mut input);
-    ///    let mut v = vec![0; 128];
     ///    assert!(match parse(&mut s) {
     ///        Ok(()) => true,
     ///        Err(_) => false,

@@ -372,7 +372,7 @@ fn test_whitespace() {
 fn test_my_whitespace() {
     let mut input = tiny_stream();
     let mut s = to_stream(&mut input);
-    s.set_whitespace(vec![' ' as u8, '\n' as u8, '@' as u8]);
+    s.set_whitespace(&[b' ', b'\n', b'@']);
     assert!(match s.whitespace() {
         Ok(()) => true,
         Err(e) => panic!("error: {:?}", e),
