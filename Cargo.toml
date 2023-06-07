@@ -1,6 +1,6 @@
 [package]
 name = "pacosso"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 authors = ["Tobias Schoofs"]
 description = "https://github.com/toschoo/pacosso/blob/master/README.md"
@@ -8,7 +8,7 @@ license = "GPL-2.0 WITH Bison-exception-2.2"
 documentation = "https://docs.rs/toschoo/pacosso"
 repository = "https://github.com/toschoo/pacosso"
 categories = ["parsing"]
-keywords = ["parser", "parser combinator", "streaming parser", "framework"]
+keywords = ["parser", "parser-combinator", "streaming-parser", "parsing-framework"]
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
