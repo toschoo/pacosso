@@ -14,10 +14,11 @@ _Pacosso_ is able to handle any reader including
 in-memory buffers and strings, files, sockets and
 IO-chains combining such readers.
 
-Documentation is available **here**.
+Documentation is available [here].
 
 [Jsosso] is a JSON parser that demonstrates the framework.
 It contains demo programs, benchmarks and more documentation.
 
+[here]: https://docs.rs/toschoo/pacosso
 [Jsosso]: https://github.com/toschoo/jsosso
 
