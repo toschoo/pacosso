@@ -11,9 +11,10 @@ pub enum ParseError {
     /// This error is not related to parsing proper but to the choice of options.
     Option(String),
 
-    /// `Failed` is an error that violates the parsing rules
-    /// defined by user code, e.g. an unexpected token.
-    /// `Failed` indicates the position where the error occurred.
+    /// `Failed` is an error that violates the user-defined parsing rules,
+    /// e.g. an unexpected token.
+    /// `Failed` comes with a detailed error message
+    /// and indicates the position where the error occurred.
     Failed(String, Cursor),
 
     /// `Fatal` wraps another kind of error, typically a `Failed`,
@@ -23,7 +24,7 @@ pub enum ParseError {
     /// This leaves the stream in an undefined state.
     /// Care must be taken to avoid such situations.
     /// If a parser fails late, after having already consumed
-    /// a large part of the stream, the position may not be
+    /// a large part of the input, the position may not be
     /// recoverable. Complex parsers are likely to need more
     /// buffer space than simpler onces. A trivial example is
     /// a language that uses curly brackets to start a block.
@@ -33,11 +34,11 @@ pub enum ParseError {
 
     /// `Effect` results from another parsing error,
     /// e.g. a `choice` fails if all its sub-parsers fail.
-    /// `Effect` indicates the position where resulting the error occurred.
+    /// `Effect` indicates the position where the resulting error occurred.
     Effect(String, Cursor, Vec<Box<ParseError>>),
 
-    /// `IOError` is an error results from an IO problem
-    /// reading the stream. It is not related to the parsing logic.
+    /// `IOError` results from an IO problem
+    /// reading the input. It is not related to the parsing logic.
     IOError(io::Error)
 }
 
