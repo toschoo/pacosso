@@ -1,5 +1,9 @@
 # Change Log
 
+## 0.2.4 2023-06-08
+
+Documentation improved.
+
 ## 0.2.3 2023-06-07
 
 Documentation path corrected.

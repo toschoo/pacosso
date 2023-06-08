@@ -125,7 +125,7 @@ impl Opts {
     /// Validate the options provided to `Stream::new`.
     /// The function returns a `ParseError::Option`
     /// if the options are invalid. Currently only two rules are enforced:
-    /// buffer size should be at least 8 bytes and buffer number should be at least 3.
+    /// buffer size should be at least 8 bytes and the number of buffers should be at least 3.
     ///
     /// It is advisable to validate options before creating the stream.
     /// This avoids surprises at run-time (especially for future versions).
@@ -140,7 +140,6 @@ impl Opts {
     ///     .set_infinite_stream();
     /// assert!(match opts.validate() {
     ///     Ok(()) => true,
-    ///     Err(ParseError::Option(_)) => false,
     ///     _ => false,
     /// });
     /// let opts = opts.set_buf_num(1);
