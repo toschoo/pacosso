@@ -19,6 +19,6 @@ Documentation is available [here].
 [Jsosso] is a JSON parser that demonstrates the framework.
 It contains demo programs, benchmarks and more documentation.
 
-[here]: https://docs.rs/pacosso/0.2.4/pacosso/
+[here]: https://docs.rs/pacosso/0.2.5/pacosso/
 [Jsosso]: https://github.com/toschoo/jsosso
 
