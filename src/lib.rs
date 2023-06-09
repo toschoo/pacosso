@@ -485,7 +485,7 @@ impl<'a, R: Read> Stream<'a, R> {
         Ok(())
     }
 
-    fn bytes_to_read(&self, buf: usize, n: usize) -> usize {
+    fn bytes_to_read_from_buf(&self, buf: usize, n: usize) -> usize {
         if self.states[buf].size == self.opts.buf_size {
            if n > self.opts.buf_size {
                return self.opts.buf_size;
@@ -502,6 +502,41 @@ impl<'a, R: Read> Stream<'a, R> {
         }
     }
 
+    fn bytes_needed(&self, n: usize) -> usize {
+        let mut r = n; // what remains to be read
+
+        for i in 0 .. self.opts.buf_num {
+            let j = (self.cur.buf + i)%self.opts.buf_num;
+
+            if !self.states[j].valid {
+                break;
+            }
+
+            let s = if j == self.cur.buf {
+                if self.cur.pos >= self.states[j].size {
+                    0
+                } else {
+                    self.states[j].size - self.cur.pos
+                }
+            } else {
+                self.states[j].size
+            };
+
+            if r > s {
+                r -= s;
+            } else {
+                r = 0;
+                break;
+            }
+        }
+
+        if r == 0 && !self.states[self.cur.buf].valid {
+            r = 1;
+        }
+
+        r
+    }
+
     // advance stream position and return old settings for cur
     fn consume(&mut self, n: usize) -> ParseResult<Cursor> {
         // check stream position
@@ -512,8 +547,8 @@ impl<'a, R: Read> Stream<'a, R> {
         }
 
         // fill next buffer(s) if necessary
-        if self.cur.pos + n >= self.states[self.cur.buf].size {
-            let mut r = n; // what remains to be read
+        if !self.states[self.cur.buf].valid || self.cur.pos + n >= self.states[self.cur.buf].size {
+            let mut r = self.bytes_needed(n);
 
             // pre-check if we have enough room to store the request
             if n >= self.opts.buf_num * self.opts.buf_size - self.opts.buf_size {
@@ -521,7 +556,7 @@ impl<'a, R: Read> Stream<'a, R> {
             }
 
             // we only fill the current buffer if it is not completely filled
-            let offset = if self.states[self.cur.buf].size == self.opts.buf_size {
+            let offset = if self.states[self.cur.buf].valid && self.states[self.cur.buf].size == self.opts.buf_size {
                 1
             } else {
                 0
@@ -529,12 +564,17 @@ impl<'a, R: Read> Stream<'a, R> {
 
             for i in 0 .. self.opts.buf_num {
 
+                // we have enough to make progress
+                if r == 0 {
+                    break;
+                }
+
                 // we are now looking at this buffer
                 let j = (self.cur.buf + i + offset)%self.opts.buf_num;
 
                 // a socket must wait for the number of bytes we need to make progress
                 // but we must not oblige it to read more than that
-                let wanted = self.bytes_to_read(j, r);
+                let wanted = self.bytes_to_read_from_buf(j, r);
 
                 // we only fill incomplete or invalid buffers
                 if self.states[j].size < self.opts.buf_size || !self.states[j].valid {
@@ -558,11 +598,6 @@ impl<'a, R: Read> Stream<'a, R> {
                            r = 0;
                        }
                     }
-                }
-
-                // we have read enough to make progress
-                if r == 0 {
-                    break;
                 }
             }
         }
@@ -1439,7 +1474,7 @@ impl<'a, R: Read> Stream<'a, R> {
     /// let mut v2 = vec![0; expected.len()];  
     /// // read drained buffers and remaining input
     /// let mut x = 0;
-    /// let mut input2 = io::Cursor::new(v).chain(input);
+    /// let mut input2 = v.chain(input);
     /// loop {
     ///     x += match input2.read(&mut v2[x..]) {
     ///         Ok(0) => break,

@@ -1,6 +1,6 @@
 [package]
 name = "pacosso"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 authors = ["Tobias Schoofs"]
 description = "https://github.com/toschoo/pacosso/blob/master/README.md"
